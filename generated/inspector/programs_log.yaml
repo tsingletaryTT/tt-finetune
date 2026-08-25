@@ -1,0 +1,45 @@
+- program_created:
+    id: 1
+    timestamp_ns: 1787696070716680893
+- program_compile_started:
+    id: 1
+    timestamp_ns: 1787696070716964009
+- program_kernel_compile_finished:
+    id: 1
+    timestamp_ns: 1787696070717052804
+    duration_ns: 88795
+    watcher_kernel_id: 4
+    name: cq_dispatch_subordinate_compute
+    path: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch_subordinate_compute/17252961642970796691/
+    source: tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp
+- program_kernel_compile_finished:
+    id: 1
+    timestamp_ns: 1787696070717078516
+    duration_ns: 114507
+    watcher_kernel_id: 3
+    name: cq_dispatch_subordinate
+    path: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch_subordinate/6035077746647494319/
+    source: tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate.cpp
+- program_kernel_compile_finished:
+    id: 1
+    timestamp_ns: 1787696070717091794
+    duration_ns: 127785
+    watcher_kernel_id: 2
+    name: cq_dispatch
+    path: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch/2956012144703414740/
+    source: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
+- program_kernel_compile_finished:
+    id: 1
+    timestamp_ns: 1787696070717101690
+    duration_ns: 137681
+    watcher_kernel_id: 1
+    name: cq_prefetch
+    path: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_prefetch/13582924637108387587/
+    source: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
+- program_compile_finished:
+    id: 1
+    timestamp_ns: 1787696070717166920
+    duration_ns: 202911
+- program_destroyed:
+    id: 1
+    timestamp_ns: 1787696071027203290

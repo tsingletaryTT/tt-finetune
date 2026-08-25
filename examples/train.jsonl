@@ -1,0 +1,9 @@
+{"text":"Tenstorrent Blackhole accelerates tiled tensor programs."}
+{"text":"LoRA adapts a frozen language model with low-rank matrices."}
+{"text":"A deterministic checkpoint contains model, optimizer, and progress state."}
+{"text":"Sequence packing reduces padding while preserving causal boundaries."}
+{"text":"The execution planner selects schedules from semantics and geometry."}
+{"text":"PEFT adapters can be saved and reloaded without the development source tree."}
+{"text":"The doctor command verifies device, driver, runtime, and compiler readiness."}
+{"text":"Useful-token throughput excludes padding that does not train the model."}
+

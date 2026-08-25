@@ -1,0 +1,2 @@
+"""Stable worker configuration templates."""
+

@@ -1,0 +1,21 @@
+torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl
+transformers==4.57.1
+peft==0.19.1
+tokenizers==0.22.2
+safetensors==0.8.0
+datasets==5.0.0
+accelerate==1.14.0
+jax==0.7.1
+jaxlib==0.7.1
+nanobind==2.10.2
+graphviz==0.21
+seaborn==0.13.2
+click==8.3.1
+pandas==3.0.0
+websockets==16.0
+pydantic==2.13.4
+greenlet==3.5.4
+ml_dtypes==0.5.4
+numpy==2.5.1
+PyYAML==6.0.3
+loguru==0.7.3

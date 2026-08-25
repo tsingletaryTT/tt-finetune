@@ -1,0 +1,5 @@
+0: blank
+4: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch_subordinate_compute/17252961642970796691//trisc0/trisc0.elf:/home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch_subordinate_compute/17252961642970796691//trisc1/trisc1.elf:/home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch_subordinate_compute/17252961642970796691//trisc2/trisc2.elf
+3: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch_subordinate/6035077746647494319//ncrisc/ncrisc.elf
+2: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_dispatch/2956012144703414740//brisc/brisc.elf
+1: /home/dniel_israli/.cache/tt-metal-cache/3632770678303160969/kernels/cq_prefetch/13582924637108387587//brisc/brisc.elf

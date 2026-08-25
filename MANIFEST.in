@@ -1,0 +1,5 @@
+include tt_finetune/README.md
+recursive-include tt_finetune/_runtime *
+recursive-include tt_finetune/_resources *
+recursive-include tt_finetune/kernels/cpp *.cpp
+global-exclude __pycache__ *.py[cod] *.pre-*

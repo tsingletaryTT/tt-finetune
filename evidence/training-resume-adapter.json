@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "model": "sshleifer/tiny-gpt2",
+  "geometry": "R4/B1/S32/BF16",
+  "preflight_status": "ready",
+  "memory_admitted": true,
+  "interrupted_global_steps": 1,
+  "resumed_global_steps": 2,
+  "checkpoint_steps": [
+    1,
+    2,
+    2
+  ],
+  "persistent_cache_status": null,
+  "peft_type": "LORA",
+  "adapter_tensors": 4,
+  "adapter_parameters": 64,
+  "adapter_weights_sha256": "a5104e9c008fc3fc2f78a298ba47fdbac91d5e3effa7bbd89f83a7066f3545cd",
+  "reload_adapter_names": [
+    "default"
+  ],
+  "installed_package": "/tmp/tt-finetune-clean-venv-final/lib/python3.12/site-packages/tt_finetune/__init__.py",
+  "pythonpath": null
+}

@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "package": "tt-finetune",
+  "version": "0.1.0rc1",
+  "wheel": "dist/tt_finetune-0.1.0rc1-cp312-cp312-linux_x86_64.whl",
+  "wheel_sha256": "469c60b89369c6636ca542a5d833d1634370637f155a20717cd61a8a92e25bd9",
+  "release_source_hash": "f31304cb1ff31e55e9477cf6902b7e565d00a748ec5073521f8d23cff4960950",
+  "release_source_files": 10500,
+  "platform": "Linux x86_64, glibc 2.34+, CPython 3.12",
+  "hardware": "one Tenstorrent Blackhole P150a",
+  "wheel_bytes": 374666218,
+  "installed_package_bytes": 1404838662,
+  "clean_install": "passed",
+  "source_masked_relocation": "passed",
+  "p150a_device_smoke": "passed",
+  "p150a_training_resume_adapter_reload": "passed",
+  "owned_stable_regression": "571 passed, 6 deselected",
+  "development_paths_in_wheel": 0,
+  "absolute_rpaths_in_wheel": 0
+}

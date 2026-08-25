@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "environment": "fresh CPython 3.12 virtual environment outside the repository",
+  "working_directory": "/tmp",
+  "pythonpath_unset": true,
+  "installed_input": "only the release wheel; normal dependencies resolved by pip",
+  "package_version": "0.1.0rc1",
+  "dependency_check": "passed",
+  "import": "passed",
+  "doctor": "passed",
+  "device_smoke": "passed",
+  "model_construction": "passed",
+  "trainer_construction": "passed",
+  "support_query": "passed",
+  "planner_inspection": "passed"
+}

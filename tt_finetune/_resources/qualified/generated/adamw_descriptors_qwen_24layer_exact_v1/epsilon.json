@@ -1,0 +1,143 @@
+{
+  "format_version": 1,
+  "kernels": [
+    {
+      "thread_type": "compute",
+      "cpp_source": "// Exact capturable-AdamW epsilon phase:\n//   FP32 denominator + FP32 scaled_epsilon.\n\n#define FP32_DEST_ACC_EN 1\n\n#include \"api/compute/common.h\"\n#include \"api/compute/eltwise_binary.h\"\n#include \"api/compute/eltwise_binary_sfpu.h\"\n#include \"api/compute/eltwise_unary/eltwise_unary.h\"\n#include \"api/compute/eltwise_unary/typecast.h\"\n#include \"api/compute/pack.h\"\n#include \"api/compute/reg_api.h\"\n#include \"api/compute/tile_move_copy.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\n\nnamespace {\nconstexpr uint32_t cb_denominator = 0;\nconstexpr uint32_t cb_epsilon = 1;\nconstexpr uint32_t cb_output = 2;\n}  // namespace\n\nvoid kernel_main() {\n    constexpr uint32_t total_blocks = 17184;\n    constexpr uint32_t blocks_per_node = 269;\n    constexpr uint32_t rows_per_block = 1;\n    constexpr uint32_t grid_columns = 8;\n\n    CircularBuffer denominator(cb_denominator);\n    CircularBuffer epsilon(cb_epsilon);\n    CircularBuffer output(cb_output);\n    const uint32_t node =\n        get_absolute_logical_y() * grid_columns + get_absolute_logical_x();\n\n    epsilon.wait_front(1);\n    DeviceZoneScopedN(\"adamw_exact_epsilon\");\n    for (uint32_t local_block = 0; local_block < blocks_per_node;\n         ++local_block) {\n        const uint32_t block = node * blocks_per_node + local_block;\n        if (block >= total_blocks) {\n            continue;\n        }\n        denominator.wait_front(rows_per_block);\n        output.reserve_back(rows_per_block);\n        unary_op_init_common(cb_denominator, cb_output);\n        for (uint32_t tile = 0; tile < rows_per_block; ++tile) {\n            tile_regs_acquire();\n            copy_tile_to_dst_init_short_with_dt(\n                cb_epsilon, cb_denominator);\n            copy_tile(cb_denominator, tile, 0);\n            copy_tile_to_dst_init_short_with_dt(cb_denominator, cb_epsilon);\n            copy_tile(cb_epsilon, 0, 1);\n            add_binary_tile_init();\n            add_binary_tile(0, 1, 0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_output)));\n            pack_tile<true>(0, cb_output, tile);\n            tile_regs_release();\n        }\n        output.push_back(rows_per_block);\n        denominator.pop_front(rows_per_block);\n    }\n    epsilon.pop_front(1);\n}\n",
+      "tensor_indices": [],
+      "kernel_config": {
+        "type": "ComputeKernelConfig",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "dst_full_sync_en": false,
+        "unpack_to_dest_modes": [
+          "Fp32",
+          "Fp32",
+          "Fp32",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default"
+        ],
+        "bfp8_pack_precise": false,
+        "math_approx_mode": false
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc0(0);\n  int8_t v1 = 0;\n  int32_t v2 = 0;\n  int32_t v3 = 4096;\n  int32_t v4 = 1;\n  size_t v5 = 0;\n  size_t v6 = 17184;\n  size_t v7 = 1;\n  size_t v8 = 8;\n  size_t v9 = 269;\n  CircularBuffer cb_ctarg_0(get_compile_time_arg_val(0));\n  CircularBuffer cb_ctarg_1(get_compile_time_arg_val(1));\n  cb_ctarg_1.reserve_back(v4);\n  int32_t v10 = get_common_arg_val<uint32_t>(v7);\n  auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<1, 3>(), 1>();\n  TensorAccessor v11 = TensorAccessor(tensor_accessor_args_0, v10, v3);\n  noc0.async_read(v11, CoreLocalMem<uint32_t>(cb_ctarg_1.get_write_ptr()), v11.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v2)}, {});\n  noc0.async_read_barrier();\n  cb_ctarg_1.push_back(v4);\n  size_t v12 = get_absolute_logical_x();\n  size_t v13 = get_absolute_logical_y();\n  size_t v14 = v13 * v8;\n  size_t v15 = v14 + v12;\n  for (size_t i16 = v5; i16 < v9; i16 += v7) {\n    size_t v17 = v15 * v9;\n    size_t v18 = v17 + i16;\n    ptrdiff_t v19 = (ptrdiff_t) v18;\n    ptrdiff_t v20 = (ptrdiff_t) v6;\n    bool v21 = v19 < v20;\n    if (v21) {\n      cb_ctarg_0.reserve_back(v4);\n      int32_t v22 = get_common_arg_val<uint32_t>(v5);\n      auto tensor_accessor_args_1 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 3>(), 0>();\n      TensorAccessor v23 = TensorAccessor(tensor_accessor_args_1, v22, v3);\n      ptrdiff_t v24 = (ptrdiff_t) v18;\n      int32_t v25 = (int32_t) v24;\n      noc0.async_read(v23, CoreLocalMem<uint32_t>(cb_ctarg_0.get_write_ptr()), v23.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v25)}, {});\n      noc0.async_read_barrier();\n      cb_ctarg_0.push_back(v4);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        0,
+        1
+      ],
+      "kernel_config": {
+        "type": "ReaderKernelConfig"
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc1(1);\n  int8_t v1 = 1;\n  int32_t v2 = 0;\n  int32_t v3 = 4096;\n  int32_t v4 = 1;\n  size_t v5 = 0;\n  size_t v6 = 17184;\n  size_t v7 = 1;\n  size_t v8 = 8;\n  size_t v9 = 269;\n  CircularBuffer cb_ctarg_2(get_compile_time_arg_val(2));\n  size_t v10 = get_absolute_logical_x();\n  size_t v11 = get_absolute_logical_y();\n  size_t v12 = v11 * v8;\n  size_t v13 = v12 + v10;\n  for (size_t i14 = v5; i14 < v9; i14 += v7) {\n    size_t v15 = v13 * v9;\n    size_t v16 = v15 + i14;\n    ptrdiff_t v17 = (ptrdiff_t) v16;\n    ptrdiff_t v18 = (ptrdiff_t) v6;\n    bool v19 = v17 < v18;\n    if (v19) {\n      cb_ctarg_2.wait_front(v4);\n      int32_t v20 = get_common_arg_val<uint32_t>(v5);\n      auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 3>(), 0>();\n      TensorAccessor v21 = TensorAccessor(tensor_accessor_args_0, v20, v3);\n      ptrdiff_t v22 = (ptrdiff_t) v16;\n      int32_t v23 = (int32_t) v22;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_2.get_read_ptr()), v21, v21.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v23)});\n      noc1.async_write_barrier();\n      cb_ctarg_2.pop_front(v4);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        2
+      ],
+      "kernel_config": {
+        "type": "WriterKernelConfig"
+      }
+    }
+  ],
+  "core_range": {
+    "start": [
+      0,
+      0
+    ],
+    "end": [
+      7,
+      7
+    ]
+  },
+  "cb_configs": [
+    {
+      "buffer_index": 0,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 1,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 4096,
+      "num_tiles": 1,
+      "block_count": 1
+    },
+    {
+      "buffer_index": 2,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    }
+  ],
+  "num_tensors": 3,
+  "num_pipe_sync_semaphores": 0
+}

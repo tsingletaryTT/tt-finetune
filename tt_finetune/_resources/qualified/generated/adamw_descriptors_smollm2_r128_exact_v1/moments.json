@@ -1,0 +1,190 @@
+{
+  "format_version": 1,
+  "kernels": [
+    {
+      "thread_type": "compute",
+      "cpp_source": "// Exact BF16 capturable-AdamW moments with L1-resident numerical edges.\n\n#define FP32_DEST_ACC_EN 1\n\n#include \"api/compute/common.h\"\n#include \"api/compute/eltwise_binary.h\"\n#include \"api/compute/eltwise_binary_sfpu.h\"\n#include \"api/compute/eltwise_unary/binop_with_scalar.h\"\n#include \"api/compute/eltwise_unary/eltwise_unary.h\"\n#include \"api/compute/eltwise_unary/fill.h\"\n#include \"api/compute/eltwise_unary/addcmul.h\"\n#include \"api/compute/eltwise_unary/lerp.h\"\n#include \"api/compute/eltwise_unary/sqrt.h\"\n#include \"api/compute/eltwise_unary/typecast.h\"\n#include \"api/compute/pack.h\"\n#include \"api/compute/reg_api.h\"\n#include \"api/compute/tile_move_copy.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\n\nnamespace {\nconstexpr uint32_t cb_param = 0, cb_grad = 1, cb_m = 2, cb_v = 3;\nconstexpr uint32_t cb_param_out = 4, cb_m_out = 5, cb_v_out = 6,\n                   cb_sqrt_out = 7;\nconstexpr uint32_t cb_m_delta = 8, cb_m_scaled = 9, cb_g_square = 10,\n                   cb_g_scaled = 11, cb_v_scaled = 12, cb_v_next = 13;\nconstexpr uint32_t cb_one_minus_beta1 = 14, cb_beta2 = 15,\n                   cb_one_minus_beta2 = 16;\n\nALWI float bits_to_float(uint32_t bits) {\n    float value;\n    __builtin_memcpy(&value, &bits, sizeof(value));\n    return value;\n}\n\nALWI void make_bf16_constant(uint32_t output_id, uint32_t bits) {\n    CircularBuffer output(output_id);\n    output.reserve_back(1);\n    tile_regs_acquire();\n    fill_tile_init();\n    fill_tile(0, bits_to_float(bits));\n    tile_regs_commit();\n    tile_regs_wait();\n    PACK((pack_reconfig_data_format(output_id)));\n    pack_tile<true>(0, output_id, 0);\n    tile_regs_release();\n    output.push_back(1);\n}\n\ntemplate <uint32_t Op>\nALWI void binary_to_cb(uint32_t left_id, uint32_t right_id,\n                       uint32_t output_id, uint32_t tiles,\n                       bool pop_left, bool pop_right,\n                       bool right_broadcast = false) {\n    CircularBuffer left(left_id), right(right_id), output(output_id);\n    left.wait_front(tiles);\n    right.wait_front(right_broadcast ? 1 : tiles);\n    output.reserve_back(tiles);\n    if constexpr (Op == 0) {\n        unary_op_init_common(left_id, output_id);\n        mul_binary_tile_init();\n    } else if constexpr (Op == 1) {\n        sub_tiles_init(left_id, right_id);\n        reconfig_data_format(left_id, right_id);\n        PACK((pack_reconfig_data_format(output_id)));\n    } else {\n        add_tiles_init(left_id, right_id);\n        reconfig_data_format(left_id, right_id);\n        PACK((pack_reconfig_data_format(output_id)));\n    }\n    for (uint32_t tile = 0; tile < tiles; ++tile) {\n        tile_regs_acquire();\n        if constexpr (Op == 0) {\n            copy_tile_to_dst_init_short_with_dt(right_id, left_id);\n            copy_tile(left_id, tile, 0);\n            copy_tile_to_dst_init_short_with_dt(left_id, right_id);\n            copy_tile(right_id, right_broadcast ? 0 : tile, 1);\n            mul_binary_tile(0, 1, 0);\n        } else if constexpr (Op == 1) {\n            sub_tiles(left_id, right_id, tile,\n                      right_broadcast ? 0 : tile, 0);\n        } else {\n            add_tiles(left_id, right_id, tile,\n                      right_broadcast ? 0 : tile, 0);\n        }\n        tile_regs_commit();\n        tile_regs_wait();\n        PACK((pack_reconfig_data_format(output_id)));\n        pack_tile<true>(0, output_id, tile);\n        tile_regs_release();\n    }\n    output.push_back(tiles);\n    if (pop_left) left.pop_front(tiles);\n    if (pop_right) right.pop_front(right_broadcast ? 1 : tiles);\n}\n\nALWI void scalar_mul_to_cb(uint32_t input_id, uint32_t output_id,\n                           uint32_t scalar_bits, uint32_t tiles,\n                           bool pop_input) {\n    CircularBuffer input(input_id), output(output_id);\n    input.wait_front(tiles);\n    output.reserve_back(tiles);\n    init_sfpu(input_id, output_id);\n    for (uint32_t tile = 0; tile < tiles; ++tile) {\n        tile_regs_acquire();\n        copy_tile_init(input_id);\n        copy_tile(input_id, tile, 0);\n        binop_with_scalar_tile_init();\n        volatile int32_t scalar = static_cast<int32_t>(scalar_bits);\n        mul_unary_tile(0, scalar);\n        tile_regs_commit();\n        tile_regs_wait();\n        PACK((pack_reconfig_data_format(output_id)));\n        pack_tile<true>(0, output_id, tile);\n        tile_regs_release();\n    }\n    output.push_back(tiles);\n    if (pop_input) input.pop_front(tiles);\n}\n\nALWI void copy_to_cb(uint32_t input_id, uint32_t output_id,\n                     uint32_t tiles, bool pop_input) {\n    CircularBuffer input(input_id), output(output_id);\n    input.wait_front(tiles);\n    output.reserve_back(tiles);\n    init_sfpu(input_id, output_id);\n    for (uint32_t tile = 0; tile < tiles; ++tile) {\n        tile_regs_acquire();\n        copy_tile_init(input_id);\n        copy_tile(input_id, tile, 0);\n        tile_regs_commit();\n        tile_regs_wait();\n        PACK((pack_reconfig_data_format(output_id)));\n        pack_tile<true>(0, output_id, tile);\n        tile_regs_release();\n    }\n    output.push_back(tiles);\n    if (pop_input) input.pop_front(tiles);\n}\n\nALWI void sqrt_to_cb(uint32_t input_id, uint32_t output_id,\n                     uint32_t tiles, bool pop_input) {\n    CircularBuffer input(input_id), output(output_id);\n    input.wait_front(tiles);\n    output.reserve_back(tiles);\n    init_sfpu(input_id, output_id);\n    for (uint32_t tile = 0; tile < tiles; ++tile) {\n        tile_regs_acquire();\n        copy_tile_init(input_id);\n        copy_tile(input_id, tile, 0);\n        sqrt_tile_init();\n        sqrt_tile(0);\n        tile_regs_commit();\n        tile_regs_wait();\n        PACK((pack_reconfig_data_format(output_id)));\n        pack_tile<true>(0, output_id, tile);\n        tile_regs_release();\n    }\n    output.push_back(tiles);\n    if (pop_input) input.pop_front(tiles);\n}\n\nALWI void lerp_scalar_to_cb(uint32_t start_id, uint32_t end_id,\n                            uint32_t output_id, uint32_t weight_bits,\n                            uint32_t tiles) {\n    CircularBuffer start(start_id), end(end_id), output(output_id);\n    start.wait_front(tiles);\n    end.wait_front(tiles);\n    output.reserve_back(tiles);\n    unary_op_init_common(start_id, output_id);\n    for (uint32_t tile = 0; tile < tiles; ++tile) {\n        tile_regs_acquire();\n        copy_tile_init(start_id);\n        copy_tile(start_id, tile, 0);\n        copy_tile_init(end_id);\n        copy_tile(end_id, tile, 1);\n        fill_tile_init();\n        fill_tile(2, bits_to_float(weight_bits));\n        lerp_tile_init();\n        lerp_tile<DataFormat::Float16_b>(0, 1, 2, 0);\n        tile_regs_commit();\n        tile_regs_wait();\n        PACK((pack_reconfig_data_format(output_id)));\n        pack_tile<true>(0, output_id, tile);\n        tile_regs_release();\n    }\n    output.push_back(tiles);\n}\n\nALWI void addcmul_to_cb(uint32_t input_id, uint32_t tensor1_id,\n                        uint32_t tensor2_id, uint32_t output_id,\n                        uint32_t scalar_bits, uint32_t tiles) {\n    CircularBuffer input(input_id), tensor1(tensor1_id), tensor2(tensor2_id),\n        output(output_id);\n    input.wait_front(tiles);\n    tensor1.wait_front(tiles);\n    tensor2.wait_front(tiles);\n    output.reserve_back(tiles);\n    unary_op_init_common(input_id, output_id);\n    for (uint32_t tile = 0; tile < tiles; ++tile) {\n        tile_regs_acquire();\n        copy_tile_init(input_id);\n        copy_tile(input_id, tile, 0);\n        copy_tile_init(tensor1_id);\n        copy_tile(tensor1_id, tile, 1);\n        copy_tile_init(tensor2_id);\n        copy_tile(tensor2_id, tile, 2);\n        addcmul_tile_init();\n        addcmul_tile<DataFormat::Float16_b>(0, 1, 2, 0, scalar_bits);\n        tile_regs_commit();\n        tile_regs_wait();\n        PACK((pack_reconfig_data_format(output_id)));\n        pack_tile<true>(0, output_id, tile);\n        tile_regs_release();\n    }\n    output.push_back(tiles);\n}\n}  // namespace\n\nvoid kernel_main() {\n    constexpr uint32_t total_blocks = 38160;\n    constexpr uint32_t blocks_per_node = 597;\n    constexpr uint32_t rows = 1;\n    constexpr uint32_t grid_columns = 8;\n    const uint32_t node =\n        get_absolute_logical_y() * grid_columns + get_absolute_logical_x();\n    CircularBuffer param(cb_param), grad(cb_grad), m(cb_m), v(cb_v);\n\n    // Compile both destination modes so SFPU binary kernels retain the full\n    // four-face tile path, then execute these BF16 checkpoints in 16-bit DST.\n    disable_fp32_dest_acc();\n\n    make_bf16_constant(cb_one_minus_beta1, 1036845056);\n    make_bf16_constant(cb_beta2, 1065353216);\n    make_bf16_constant(cb_one_minus_beta2, 981663744);\n\n    DeviceZoneScopedN(\"adamw_exact_moments_l1\");\n    for (uint32_t local = 0; local < blocks_per_node; ++local) {\n        if (node * blocks_per_node + local >= total_blocks) continue;\n        copy_to_cb(cb_param, cb_param_out, rows, false);\n\n        binary_to_cb<1>(cb_grad, cb_m, cb_m_delta, rows, false, false);\n        binary_to_cb<0>(cb_m_delta, cb_one_minus_beta1, cb_m_scaled,\n                        rows, true, false, true);\n        binary_to_cb<2>(cb_m, cb_m_scaled, cb_m_out,\n                        rows, false, true);\n\n        // The captured StableHLO lowers the second moment into explicit BF16\n        // multiply/add checkpoints.  The native addcmul SFPU has a different\n        // scalar contract and already differs on the first invocation.\n        binary_to_cb<0>(cb_grad, cb_grad, cb_g_square,\n                        rows, false, false);\n        binary_to_cb<0>(cb_g_square, cb_one_minus_beta2, cb_g_scaled,\n                        rows, true, false, true);\n        binary_to_cb<0>(cb_v, cb_beta2, cb_v_scaled,\n                        rows, false, false, true);\n        binary_to_cb<2>(cb_v_scaled, cb_g_scaled, cb_v_next,\n                        rows, true, true);\n        copy_to_cb(cb_v_next, cb_v_out, rows, false);\n        sqrt_to_cb(cb_v_next, cb_sqrt_out, rows, true);\n\n        v.pop_front(rows);\n        m.pop_front(rows);\n        grad.pop_front(rows);\n        param.pop_front(rows);\n    }\n    CircularBuffer(cb_one_minus_beta2).pop_front(1);\n    CircularBuffer(cb_beta2).pop_front(1);\n    CircularBuffer(cb_one_minus_beta1).pop_front(1);\n    enable_fp32_dest_acc();\n}\n",
+      "tensor_indices": [],
+      "kernel_config": {
+        "type": "ComputeKernelConfig",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc_en": false,
+        "dst_full_sync_en": false,
+        "unpack_to_dest_modes": [],
+        "bfp8_pack_precise": false,
+        "math_approx_mode": false
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc0(0);\n  int8_t v1 = 0;\n  int32_t v2 = 0;\n  int32_t v3 = 2048;\n  int32_t v4 = 1;\n  size_t v5 = 76320;\n  size_t v6 = 0;\n  size_t v7 = 38160;\n  size_t v8 = 1;\n  size_t v9 = 8;\n  size_t v10 = 72;\n  size_t v11 = 597;\n  CircularBuffer cb_ctarg_2(get_compile_time_arg_val(2));\n  CircularBuffer cb_ctarg_3(get_compile_time_arg_val(3));\n  CircularBuffer cb_ctarg_1(get_compile_time_arg_val(1));\n  CircularBuffer cb_ctarg_0(get_compile_time_arg_val(0));\n  size_t v12 = get_absolute_logical_x();\n  size_t v13 = get_absolute_logical_y();\n  size_t v14 = v13 * v9;\n  size_t v15 = v14 + v12;\n  for (size_t i16 = v6; i16 < v11; i16 += v8) {\n    size_t v17 = v15 * v11;\n    size_t v18 = v17 + i16;\n    ptrdiff_t v19 = (ptrdiff_t) v18;\n    ptrdiff_t v20 = (ptrdiff_t) v7;\n    bool v21 = v19 < v20;\n    if (v21) {\n      cb_ctarg_0.reserve_back(v4);\n      cb_ctarg_1.reserve_back(v4);\n      cb_ctarg_2.reserve_back(v4);\n      cb_ctarg_3.reserve_back(v4);\n      int32_t v22 = get_common_arg_val<uint32_t>(v8);\n      auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 17>(), 1>();\n      TensorAccessor v23 = TensorAccessor(tensor_accessor_args_0, v22, v3);\n      ptrdiff_t v24 = (ptrdiff_t) v18;\n      int32_t v25 = (int32_t) v24;\n      noc0.async_read(v23, CoreLocalMem<uint32_t>(cb_ctarg_0.get_write_ptr()), v23.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v25)}, {});\n      size_t v26 = v18 + v10;\n      int32_t v27 = get_common_arg_val<uint32_t>(v6);\n      auto tensor_accessor_args_1 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<1, 17>(), 0>();\n      TensorAccessor v28 = TensorAccessor(tensor_accessor_args_1, v27, v3);\n      ptrdiff_t v29 = (ptrdiff_t) v26;\n      int32_t v30 = (int32_t) v29;\n      noc0.async_read(v28, CoreLocalMem<uint32_t>(cb_ctarg_1.get_write_ptr()), v28.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v30)}, {});\n      size_t v31 = v18 + v7;\n      auto tensor_accessor_args_2 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 17>(), 1>();\n      TensorAccessor v32 = TensorAccessor(tensor_accessor_args_2, v22, v3);\n      ptrdiff_t v33 = (ptrdiff_t) v31;\n      int32_t v34 = (int32_t) v33;\n      noc0.async_read(v32, CoreLocalMem<uint32_t>(cb_ctarg_2.get_write_ptr()), v32.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v34)}, {});\n      size_t v35 = v18 + v5;\n      auto tensor_accessor_args_3 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 17>(), 1>();\n      TensorAccessor v36 = TensorAccessor(tensor_accessor_args_3, v22, v3);\n      ptrdiff_t v37 = (ptrdiff_t) v35;\n      int32_t v38 = (int32_t) v37;\n      noc0.async_read(v36, CoreLocalMem<uint32_t>(cb_ctarg_3.get_write_ptr()), v36.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v38)}, {});\n      noc0.async_read_barrier();\n      cb_ctarg_3.push_back(v4);\n      cb_ctarg_2.push_back(v4);\n      cb_ctarg_1.push_back(v4);\n      cb_ctarg_0.push_back(v4);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        1,
+        0
+      ],
+      "kernel_config": {
+        "type": "ReaderKernelConfig"
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc1(1);\n  int8_t v1 = 1;\n  int32_t v2 = 0;\n  int32_t v3 = 2048;\n  int32_t v4 = 1;\n  size_t v5 = 114480;\n  size_t v6 = 76320;\n  size_t v7 = 0;\n  size_t v8 = 38160;\n  size_t v9 = 1;\n  size_t v10 = 8;\n  size_t v11 = 597;\n  CircularBuffer cb_ctarg_5(get_compile_time_arg_val(5));\n  CircularBuffer cb_ctarg_6(get_compile_time_arg_val(6));\n  CircularBuffer cb_ctarg_4(get_compile_time_arg_val(4));\n  CircularBuffer cb_ctarg_7(get_compile_time_arg_val(7));\n  size_t v12 = get_absolute_logical_x();\n  size_t v13 = get_absolute_logical_y();\n  size_t v14 = v13 * v10;\n  size_t v15 = v14 + v12;\n  for (size_t i16 = v7; i16 < v11; i16 += v9) {\n    size_t v17 = v15 * v11;\n    size_t v18 = v17 + i16;\n    ptrdiff_t v19 = (ptrdiff_t) v18;\n    ptrdiff_t v20 = (ptrdiff_t) v8;\n    bool v21 = v19 < v20;\n    if (v21) {\n      cb_ctarg_4.wait_front(v4);\n      cb_ctarg_5.wait_front(v4);\n      cb_ctarg_6.wait_front(v4);\n      cb_ctarg_7.wait_front(v4);\n      int32_t v22 = get_common_arg_val<uint32_t>(v7);\n      auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 17>(), 0>();\n      TensorAccessor v23 = TensorAccessor(tensor_accessor_args_0, v22, v3);\n      ptrdiff_t v24 = (ptrdiff_t) v18;\n      int32_t v25 = (int32_t) v24;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_4.get_read_ptr()), v23, v23.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v25)});\n      size_t v26 = v18 + v8;\n      auto tensor_accessor_args_1 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 17>(), 0>();\n      TensorAccessor v27 = TensorAccessor(tensor_accessor_args_1, v22, v3);\n      ptrdiff_t v28 = (ptrdiff_t) v26;\n      int32_t v29 = (int32_t) v28;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_5.get_read_ptr()), v27, v27.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v29)});\n      size_t v30 = v18 + v6;\n      auto tensor_accessor_args_2 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 17>(), 0>();\n      TensorAccessor v31 = TensorAccessor(tensor_accessor_args_2, v22, v3);\n      ptrdiff_t v32 = (ptrdiff_t) v30;\n      int32_t v33 = (int32_t) v32;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_6.get_read_ptr()), v31, v31.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v33)});\n      size_t v34 = v18 + v5;\n      auto tensor_accessor_args_3 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 17>(), 0>();\n      TensorAccessor v35 = TensorAccessor(tensor_accessor_args_3, v22, v3);\n      ptrdiff_t v36 = (ptrdiff_t) v34;\n      int32_t v37 = (int32_t) v36;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_7.get_read_ptr()), v35, v35.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v37)});\n      noc1.async_write_barrier();\n      cb_ctarg_7.pop_front(v4);\n      cb_ctarg_6.pop_front(v4);\n      cb_ctarg_5.pop_front(v4);\n      cb_ctarg_4.pop_front(v4);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        2
+      ],
+      "kernel_config": {
+        "type": "WriterKernelConfig"
+      }
+    }
+  ],
+  "core_range": {
+    "start": [
+      0,
+      0
+    ],
+    "end": [
+      7,
+      7
+    ]
+  },
+  "cb_configs": [
+    {
+      "buffer_index": 0,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 1,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 2,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 3,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 4,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 5,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 6,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 7,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 8,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 9,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 10,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 11,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 12,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 13,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 14,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 2048,
+      "num_tiles": 1,
+      "block_count": 1
+    },
+    {
+      "buffer_index": 15,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 2048,
+      "num_tiles": 1,
+      "block_count": 1
+    },
+    {
+      "buffer_index": 16,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 2048,
+      "num_tiles": 1,
+      "block_count": 1
+    }
+  ],
+  "num_tensors": 3,
+  "num_pipe_sync_semaphores": 0
+}

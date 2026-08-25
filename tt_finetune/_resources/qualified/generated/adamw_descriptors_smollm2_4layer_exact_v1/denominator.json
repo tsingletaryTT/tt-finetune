@@ -1,0 +1,151 @@
+{
+  "format_version": 1,
+  "kernels": [
+    {
+      "thread_type": "compute",
+      "cpp_source": "// Exact capturable-AdamW denominator rounding phase.\n//\n// For each tile this reproduces:\n//   BF16 sqrt(v) -> FP32 / FP32 denominator_scale -> FP32\n// The TTNN export confirms there is no BF16 checkpoint after the division.\n\n#define FP32_DEST_ACC_EN 1\n\n#include \"api/compute/common.h\"\n#include \"api/compute/eltwise_binary_sfpu.h\"\n#include \"api/compute/eltwise_unary/eltwise_unary.h\"\n#include \"api/compute/eltwise_unary/typecast.h\"\n#include \"api/compute/pack.h\"\n#include \"api/compute/reg_api.h\"\n#include \"api/compute/tile_move_copy.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\n\nnamespace {\n\nconstexpr uint32_t cb_sqrt_v = 0;\nconstexpr uint32_t cb_scale = 1;\nconstexpr uint32_t cb_output = 2;\nconstexpr uint32_t cb_sqrt_f32 = 3;\n\n}  // namespace\n\nvoid kernel_main() {\n    constexpr uint32_t total_blocks = 1272;\n    constexpr uint32_t blocks_per_node = 20;\n    constexpr uint32_t rows_per_block = 1;\n    constexpr uint32_t grid_columns = 8;\n\n    CircularBuffer sqrt_v(cb_sqrt_v);\n    CircularBuffer scale(cb_scale);\n    CircularBuffer output(cb_output);\n    CircularBuffer sqrt_f32(cb_sqrt_f32);\n    const uint32_t node =\n        get_absolute_logical_y() * grid_columns + get_absolute_logical_x();\n\n    scale.wait_front(1);\n    DeviceZoneScopedN(\"adamw_exact_denominator\");\n    for (uint32_t local_block = 0; local_block < blocks_per_node;\n         ++local_block) {\n        const uint32_t block = node * blocks_per_node + local_block;\n        if (block >= total_blocks) {\n            continue;\n        }\n        sqrt_v.wait_front(rows_per_block);\n        output.reserve_back(rows_per_block);\n        for (uint32_t tile = 0; tile < rows_per_block; ++tile) {\n            // TTNN materializes the BF16->FP32 typecast before its divide.\n            // Preserve that exact numerical boundary in private L1.\n            sqrt_f32.reserve_back(1);\n            unary_op_init_common(cb_sqrt_v, cb_sqrt_f32);\n            tile_regs_acquire();\n            copy_tile_init(cb_sqrt_v);\n            copy_tile(cb_sqrt_v, tile, 0);\n            typecast_tile_init<\n                (uint32_t)DataFormat::Float16_b,\n                (uint32_t)DataFormat::Float32>();\n            typecast_tile<\n                (uint32_t)DataFormat::Float16_b,\n                (uint32_t)DataFormat::Float32>(0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_sqrt_f32)));\n            pack_tile<true>(0, cb_sqrt_f32, 0);\n            tile_regs_release();\n            sqrt_f32.push_back(1);\n\n            sqrt_f32.wait_front(1);\n            unary_op_init_common(cb_sqrt_f32, cb_output);\n            tile_regs_acquire();\n            copy_tile_to_dst_init_short_with_dt(cb_scale, cb_sqrt_f32);\n            copy_tile(cb_sqrt_f32, 0, 0);\n            copy_tile_to_dst_init_short_with_dt(cb_sqrt_f32, cb_scale);\n            copy_tile(cb_scale, 0, 1);\n            div_binary_tile_init();\n            div_binary_tile(0, 1, 0);\n\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_output)));\n            pack_tile<true>(0, cb_output, tile);\n            tile_regs_release();\n            sqrt_f32.pop_front(1);\n        }\n        output.push_back(rows_per_block);\n        sqrt_v.pop_front(rows_per_block);\n    }\n    scale.pop_front(1);\n}\n",
+      "tensor_indices": [],
+      "kernel_config": {
+        "type": "ComputeKernelConfig",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "dst_full_sync_en": false,
+        "unpack_to_dest_modes": [
+          "Default",
+          "Fp32",
+          "Fp32",
+          "Fp32",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default"
+        ],
+        "bfp8_pack_precise": false,
+        "math_approx_mode": false
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc0(0);\n  int32_t v1 = 2048;\n  int8_t v2 = 0;\n  int32_t v3 = 0;\n  int32_t v4 = 4096;\n  int32_t v5 = 1;\n  size_t v6 = 3816;\n  size_t v7 = 0;\n  size_t v8 = 1272;\n  size_t v9 = 1;\n  size_t v10 = 8;\n  size_t v11 = 20;\n  CircularBuffer cb_ctarg_0(get_compile_time_arg_val(0));\n  CircularBuffer cb_ctarg_1(get_compile_time_arg_val(1));\n  cb_ctarg_1.reserve_back(v5);\n  int32_t v12 = get_common_arg_val<uint32_t>(v7);\n  auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<1, 4>(), 0>();\n  TensorAccessor v13 = TensorAccessor(tensor_accessor_args_0, v12, v4);\n  noc0.async_read(v13, CoreLocalMem<uint32_t>(cb_ctarg_1.get_write_ptr()), v13.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v3)}, {});\n  noc0.async_read_barrier();\n  cb_ctarg_1.push_back(v5);\n  size_t v14 = get_absolute_logical_x();\n  size_t v15 = get_absolute_logical_y();\n  size_t v16 = v15 * v10;\n  size_t v17 = v16 + v14;\n  for (size_t i18 = v7; i18 < v11; i18 += v9) {\n    size_t v19 = v17 * v11;\n    size_t v20 = v19 + i18;\n    ptrdiff_t v21 = (ptrdiff_t) v20;\n    ptrdiff_t v22 = (ptrdiff_t) v8;\n    bool v23 = v21 < v22;\n    if (v23) {\n      cb_ctarg_0.reserve_back(v5);\n      size_t v24 = v20 + v6;\n      int32_t v25 = get_common_arg_val<uint32_t>(v9);\n      auto tensor_accessor_args_1 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 4>(), 1>();\n      TensorAccessor v26 = TensorAccessor(tensor_accessor_args_1, v25, v1);\n      ptrdiff_t v27 = (ptrdiff_t) v24;\n      int32_t v28 = (int32_t) v27;\n      noc0.async_read(v26, CoreLocalMem<uint32_t>(cb_ctarg_0.get_write_ptr()), v26.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v28)}, {});\n      noc0.async_read_barrier();\n      cb_ctarg_0.push_back(v5);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        1,
+        0
+      ],
+      "kernel_config": {
+        "type": "ReaderKernelConfig"
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc1(1);\n  int8_t v1 = 1;\n  int32_t v2 = 0;\n  int32_t v3 = 4096;\n  int32_t v4 = 1;\n  size_t v5 = 0;\n  size_t v6 = 1272;\n  size_t v7 = 1;\n  size_t v8 = 8;\n  size_t v9 = 20;\n  CircularBuffer cb_ctarg_2(get_compile_time_arg_val(2));\n  size_t v10 = get_absolute_logical_x();\n  size_t v11 = get_absolute_logical_y();\n  size_t v12 = v11 * v8;\n  size_t v13 = v12 + v10;\n  for (size_t i14 = v5; i14 < v9; i14 += v7) {\n    size_t v15 = v13 * v9;\n    size_t v16 = v15 + i14;\n    ptrdiff_t v17 = (ptrdiff_t) v16;\n    ptrdiff_t v18 = (ptrdiff_t) v6;\n    bool v19 = v17 < v18;\n    if (v19) {\n      cb_ctarg_2.wait_front(v4);\n      int32_t v20 = get_common_arg_val<uint32_t>(v5);\n      auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 4>(), 0>();\n      TensorAccessor v21 = TensorAccessor(tensor_accessor_args_0, v20, v3);\n      ptrdiff_t v22 = (ptrdiff_t) v16;\n      int32_t v23 = (int32_t) v22;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_2.get_read_ptr()), v21, v21.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v23)});\n      noc1.async_write_barrier();\n      cb_ctarg_2.pop_front(v4);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        2
+      ],
+      "kernel_config": {
+        "type": "WriterKernelConfig"
+      }
+    }
+  ],
+  "core_range": {
+    "start": [
+      0,
+      0
+    ],
+    "end": [
+      7,
+      7
+    ]
+  },
+  "cb_configs": [
+    {
+      "buffer_index": 0,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 1,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 4096,
+      "num_tiles": 1,
+      "block_count": 1
+    },
+    {
+      "buffer_index": 2,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 3,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    }
+  ],
+  "num_tensors": 3,
+  "num_pipe_sync_semaphores": 0
+}

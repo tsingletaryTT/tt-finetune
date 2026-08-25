@@ -1,0 +1,138 @@
+"""Backend-neutral training runtime."""
+
+from .loop import (
+    LoopConfig,
+    LoopState,
+    OptimizerStep,
+    TrainingLoop,
+    TrainingOps,
+)
+from .packed_state import (
+    ResidentModelShape,
+    PackedTransformerStack,
+    PackedStateRegion,
+    pack_transformer_stack,
+)
+from .resident_engine import (
+    AdamWScalars,
+    PackedUpdateEngine,
+    ResidentStackEngine,
+    ResidentStepResult,
+)
+from .causal_lm import (
+    CausalLMDeviceEdges,
+    CausalLMHostEdges,
+)
+from .geometry_planner import (
+    GeometryPlan,
+    GeometryHardwareLimits,
+    ModelGeometry,
+    RankPlan,
+    model_geometry,
+    plan_geometry,
+    plan_rank_backend,
+)
+from .descriptor_cache import (
+    descriptor_cache_path,
+    resolve_descriptor_bundle,
+)
+from .execution_planner import (
+    ExecutionPlan,
+    HardwareCapabilities,
+    ExecutionMemoryPlan,
+    ResidentQualification,
+    LoRATargetGeometry,
+    PrimitiveSelection,
+    plan_execution,
+    resident_qualification_for_plan,
+)
+from .execution_runtime import (
+    ResidentBuildReport,
+    ResidentCausalLMExecutor,
+    build_resident_executor,
+)
+from .memory_planner import MemoryEstimate, estimate_memory
+from .autotuner import (
+    CandidateMeasurement,
+    DataShapeProfile,
+    ExecutionGeometryCandidate,
+    AutotuneProfile,
+    PlannerContext,
+    PlannerRequest,
+    ExecutionProfileCache,
+    generate_candidates,
+    execution_candidate_from_dict,
+    candidate_worker_arguments,
+    plan_autotuned_execution,
+    semantic_profile_key,
+)
+from .autotune_quality import (
+    GeometryStressCase,
+    adaptive_candidate_portfolio,
+    aggregate_autotuner_quality,
+    candidate_runtime_signature,
+    default_geometry_stress_matrix,
+    measurement_objective,
+    qualify_autotuner_case,
+    select_non_regressing_winner,
+)
+
+__all__ = [
+    "LoopConfig",
+    "LoopState",
+    "OptimizerStep",
+    "TrainingLoop",
+    "TrainingOps",
+    "ResidentModelShape",
+    "PackedTransformerStack",
+    "PackedStateRegion",
+    "pack_transformer_stack",
+    "AdamWScalars",
+    "PackedUpdateEngine",
+    "ResidentStackEngine",
+    "ResidentStepResult",
+    "CausalLMDeviceEdges",
+    "CausalLMHostEdges",
+    "RankPlan",
+    "GeometryPlan",
+    "GeometryHardwareLimits",
+    "ModelGeometry",
+    "model_geometry",
+    "plan_geometry",
+    "plan_rank_backend",
+    "descriptor_cache_path",
+    "resolve_descriptor_bundle",
+    "ExecutionPlan",
+    "HardwareCapabilities",
+    "ExecutionMemoryPlan",
+    "ResidentQualification",
+    "LoRATargetGeometry",
+    "PrimitiveSelection",
+    "plan_execution",
+    "resident_qualification_for_plan",
+    "ResidentBuildReport",
+    "ResidentCausalLMExecutor",
+    "build_resident_executor",
+    "MemoryEstimate",
+    "estimate_memory",
+    "CandidateMeasurement",
+    "DataShapeProfile",
+    "ExecutionGeometryCandidate",
+    "AutotuneProfile",
+    "PlannerContext",
+    "PlannerRequest",
+    "ExecutionProfileCache",
+    "generate_candidates",
+    "execution_candidate_from_dict",
+    "candidate_worker_arguments",
+    "plan_autotuned_execution",
+    "semantic_profile_key",
+    "GeometryStressCase",
+    "adaptive_candidate_portfolio",
+    "aggregate_autotuner_quality",
+    "candidate_runtime_signature",
+    "default_geometry_stress_matrix",
+    "measurement_objective",
+    "qualify_autotuner_case",
+    "select_non_regressing_winner",
+]

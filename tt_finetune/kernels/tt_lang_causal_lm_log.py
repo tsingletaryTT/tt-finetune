@@ -1,0 +1,143 @@
+"""Exact FP32 unary-log phase for the resident causal-LM edge."""
+
+from __future__ import annotations
+
+import hashlib
+import inspect
+from functools import lru_cache
+from pathlib import Path
+from typing import Callable
+
+from .tt_lang_adamw import _clear_ttl_compile_wrapper_cache
+from .tt_lang_frozen_linear_lora import BLACKHOLE_P150A_GRID
+
+
+ttl = None
+tt_lang_operation = None
+
+
+@lru_cache(maxsize=8)
+def build_tt_lang_causal_lm_log(*, tokens: int) -> Callable:
+    if tokens <= 0 or tokens % 32:
+        raise ValueError("causal-LM log tokens must be positive /32")
+    row_tiles = tokens // 32
+    if row_tiles > 110:
+        raise ValueError("causal-LM log row tiles exceed the Blackhole grid")
+
+    global ttl, tt_lang_operation
+    if ttl is None or tt_lang_operation is None:
+        try:
+            import ttl as ttl_module
+            from tt_torch.tt_lang import tt_lang_operation as decorator
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError("native causal-LM log requires TT-XLA") from exc
+        ttl, tt_lang_operation = ttl_module, decorator
+
+    options: dict[str, object] = {
+        "grid": BLACKHOLE_P150A_GRID,
+        "fp32_dest_acc_en": True,
+    }
+    if "math_approx_mode" in inspect.signature(ttl.operation).parameters:
+        options["math_approx_mode"] = False
+
+    @ttl.operation(**options)
+    def _program(reduced_sum, output):
+        c0 = ttl.make_dataflow_buffer_like(reduced_sum, shape=(1, 1))
+        c1 = ttl.make_dataflow_buffer_like(output, shape=(1, 1))
+
+        @ttl.datamovement()
+        def read():
+            with c0.reserve() as tile:
+                transaction = ttl.copy(reduced_sum[0:1, 0:1], tile)
+                transaction.wait()
+
+        @ttl.compute()
+        def compute():
+            with c0.wait() as value:
+                with c1.reserve() as result:
+                    result.store(value)
+
+        @ttl.datamovement()
+        def write():
+            with c1.wait() as value:
+                transaction = ttl.copy(value, output[0:1, 0:1])
+                transaction.wait()
+
+    variant = hashlib.sha256(f"causal-lm-log-v1:{tokens}".encode()).hexdigest()[:16]
+
+    @tt_lang_operation(
+        operation_id=f"tt_finetune.causal_lm_log.{variant}",
+        arg_roles=("in", "out"),
+        version_tag=f"causal-lm-log-{variant}",
+    )
+    def operation(reduced_sum, output):
+        _clear_ttl_compile_wrapper_cache(_program)
+        result = _program(reduced_sum, output)
+        closure = _program.__closure__ or ()
+        for name, cell in zip(_program.__code__.co_freevars, closure):
+            if name != "cache" or not isinstance(cell.cell_contents, dict):
+                continue
+            for compiled in cell.cell_contents.values():
+                if len(compiled.cb_configs) != 2:
+                    raise RuntimeError(
+                        f"causal-LM log expected 2 CBs, got {len(compiled.cb_configs)}"
+                    )
+                reader_indices = [
+                    compiled.kernel_tensor_indices[index]
+                    for index, (path, thread) in enumerate(compiled.kernel_paths)
+                    if thread != "compute" and "read" in Path(path).name
+                ]
+                writer_indices = [
+                    compiled.kernel_tensor_indices[index]
+                    for index, (path, thread) in enumerate(compiled.kernel_paths)
+                    if thread != "compute" and "write" in Path(path).name
+                ]
+                if reader_indices != [[0]] or writer_indices != [[1]]:
+                    raise RuntimeError(
+                        "causal-LM log tensor ABI changed: "
+                        f"reader={reader_indices}, writer={writer_indices}"
+                    )
+                cpp = Path(__file__).with_name("cpp")
+                sources = {
+                    "read": (cpp / "causal_lm_log_reader.cpp").read_text(),
+                    "compute": (cpp / "causal_lm_log_compute.cpp").read_text(),
+                    "write": (cpp / "causal_lm_log_writer.cpp").read_text(),
+                }
+                sources = {
+                    kind: source.replace("@ROW_TILES@", str(row_tiles))
+                    for kind, source in sources.items()
+                }
+                for path, thread in compiled.kernel_paths:
+                    kind = "compute" if thread == "compute" else (
+                        "read" if "read" in Path(path).name else "write"
+                    )
+                    Path(path).write_text(sources[kind], encoding="utf-8")
+                for config in compiled.kernel_configs:
+                    if hasattr(config, "math_fidelity"):
+                        enum_type = type(config.math_fidelity)
+                        config.math_fidelity = getattr(enum_type, "HiFi4")
+                    if hasattr(config, "math_approx_mode"):
+                        config.math_approx_mode = False
+                    if hasattr(config, "fp32_dest_acc_en"):
+                        config.fp32_dest_acc_en = True
+                    if hasattr(config, "unpack_to_dest_mode"):
+                        import ttnn
+                        while len(config.unpack_to_dest_mode) < 64:
+                            config.unpack_to_dest_mode.append(
+                                ttnn.UnpackToDestMode.Default
+                            )
+                        config.unpack_to_dest_mode[0] = (
+                            ttnn.UnpackToDestMode.UnpackToDestFp32
+                        )
+            break
+        return result
+
+    operation.output_shape = (tokens, 32)
+    operation.physical_programs = 1
+    operation.safe_default = False
+    operation.experimental_backend = "causal_lm_log_exact_candidate_v1"
+    operation._ttl_program = _program
+    return operation
+
+
+__all__ = ["build_tt_lang_causal_lm_log"]

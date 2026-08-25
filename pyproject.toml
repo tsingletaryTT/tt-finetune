@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools==80.9.0", "wheel==0.46.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tt-finetune"
+version = "0.1.0rc1"
+description = "LoRA and PEFT training on Tenstorrent Blackhole"
+readme = "tt_finetune/README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "torch @ https://download.pytorch.org/whl/cpu/torch-2.11.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl",
+  "transformers==4.57.1",
+  "peft==0.19.1",
+  "tokenizers==0.22.2",
+  "safetensors==0.8.0",
+  "datasets==5.0.0",
+  "accelerate==1.14.0",
+  "jax==0.7.1",
+  "jaxlib==0.7.1",
+  "nanobind==2.10.2",
+  "graphviz==0.21",
+  "seaborn==0.13.2",
+  "click==8.3.1",
+  "pandas==3.0.0",
+  "websockets==16.0",
+  "pydantic==2.13.4",
+  "greenlet==3.5.4",
+  "ml_dtypes==0.5.4",
+  "numpy==2.5.1",
+  "PyYAML==6.0.3",
+  "loguru==0.7.3",
+]
+
+[project.optional-dependencies]
+test = ["pytest==9.0.2", "build==1.4.0"]
+
+[project.scripts]
+tt-finetune = "tt_finetune.cli:main"
+tt-train = "tt_finetune.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["tt_finetune*", "blackhole_training*", "blacksmith*"]
+exclude = ["tt_finetune.tests*", "blacksmith.*.tests*", "blacksmith.tests*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+tt_finetune = ["README.md", "_runtime/**/*", "_resources/**/*", "kernels/cpp/*.cpp"]

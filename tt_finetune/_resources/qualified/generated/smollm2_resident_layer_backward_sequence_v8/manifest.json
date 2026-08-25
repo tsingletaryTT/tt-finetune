@@ -1,0 +1,4874 @@
+{
+  "status": "accepted_source_abi_gate",
+  "model": "smollm2",
+  "phase_order": [
+    "mlp",
+    "attention"
+  ],
+  "device_epoch_barrier": {
+    "writer_arrival_semaphore": 13,
+    "writer_release_semaphore": 14,
+    "reader_release_semaphore": 12,
+    "compute_release_cb": "dedicated non-aliased depth-one BF16",
+    "repeatability": "all counters return to zero at epoch exit"
+  },
+  "operation_tensor_counts": {
+    "mlp": 24,
+    "attention": 18
+  },
+  "operation_dps_layout": {
+    "mlp_inputs": [
+      0,
+      16
+    ],
+    "attention_inputs": [
+      17,
+      33
+    ],
+    "mlp_outputs": [
+      34,
+      40
+    ],
+    "attention_output": 41
+  },
+  "standalone_programs": {
+    "mlp": {
+      "kernel_sources": [
+        "layer_backward_mlp_program_0_reader.cpp",
+        "layer_backward_mlp_program_1_compute.cpp",
+        "layer_backward_mlp_program_2_writer.cpp",
+        "layer_backward_mlp_program_3_reader.cpp",
+        "layer_backward_mlp_program_4_compute.cpp",
+        "layer_backward_mlp_program_5_writer.cpp"
+      ],
+      "kernel_threads": [
+        "reader",
+        "compute",
+        "writer",
+        "reader",
+        "compute",
+        "writer"
+      ],
+      "kernel_tensor_indices": [
+        [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16
+        ],
+        [],
+        [
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40
+        ],
+        [
+          5,
+          6,
+          7
+        ],
+        [],
+        []
+      ],
+      "kernel_core_ranges": [
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        }
+      ],
+      "cb_configs": [
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 2)",
+          "block_count": "2",
+          "_cb_index": "0"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(2, 1)",
+          "block_count": "2",
+          "_cb_index": "1"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "2"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "3"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 18)",
+          "block_count": "1",
+          "_cb_index": "4"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(18, 1)",
+          "block_count": "1",
+          "_cb_index": "5"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 18)",
+          "block_count": "1",
+          "_cb_index": "6"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "7"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "8"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(4, 1)",
+          "block_count": "1",
+          "_cb_index": "9"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(4, 1)",
+          "block_count": "1",
+          "_cb_index": "10"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "11"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "12"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "13"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "14"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "15"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "16"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "2",
+          "_cb_index": "17"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(4, 1)",
+          "block_count": "1",
+          "_cb_index": "18"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "19"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "20"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "21"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "22"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "23"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "24"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "0"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "1"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "2"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "3"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "4"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "5"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "6"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "7"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "8"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "9"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "20",
+          "_cb_index": "10"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "20",
+          "_cb_index": "11"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "12"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "25"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "26"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 48)",
+          "block_count": "1",
+          "_cb_index": "27"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(48, 1)",
+          "block_count": "1",
+          "_cb_index": "28"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 48)",
+          "block_count": "1",
+          "_cb_index": "29"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "30"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "31"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "15"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "16"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "17"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "18"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "19"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "20"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "20",
+          "_cb_index": "21"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(128, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "20",
+          "_cb_index": "22"
+        }
+      ],
+      "cb_core_ranges": [
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            9,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            10,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        }
+      ]
+    },
+    "attention": {
+      "kernel_sources": [
+        "layer_backward_attention_program_0_reader.cpp",
+        "layer_backward_attention_program_1_compute.cpp",
+        "layer_backward_attention_program_2_writer.cpp",
+        "layer_backward_attention_program_3_reader.cpp",
+        "layer_backward_attention_program_4_compute.cpp",
+        "layer_backward_attention_program_5_writer.cpp"
+      ],
+      "kernel_threads": [
+        "reader",
+        "compute",
+        "writer",
+        "reader",
+        "compute",
+        "writer"
+      ],
+      "kernel_tensor_indices": [
+        [
+          17,
+          18,
+          19,
+          20,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33
+        ],
+        [],
+        [
+          41
+        ],
+        [
+          21,
+          22,
+          33
+        ],
+        [],
+        [
+          41
+        ]
+      ],
+      "kernel_core_ranges": [
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        }
+      ],
+      "cb_configs": [
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "0"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "1"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "2"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "3"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "30",
+          "_cb_index": "4"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "36",
+          "_cb_index": "5"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "36",
+          "_cb_index": "6"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "7"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "5",
+          "_cb_index": "8"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "16",
+          "_cb_index": "9"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "12",
+          "_cb_index": "10"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "14",
+          "_cb_index": "11"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "12"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "13"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "14"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "15"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "16"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "17"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(4, 1)",
+          "block_count": "2",
+          "_cb_index": "18"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "2",
+          "_cb_index": "19"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "20"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "21"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "22"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "23"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "24"
+        },
+        {
+          "dfb_index": "0",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "4",
+          "_cb_index": "0"
+        },
+        {
+          "dfb_index": "1",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "4",
+          "_cb_index": "1"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "25"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "8",
+          "_cb_index": "26"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "8",
+          "_cb_index": "4"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "8",
+          "_cb_index": "5"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "8",
+          "_cb_index": "6"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "7"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "8"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "9"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "8",
+          "_cb_index": "10"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "11"
+        },
+        {
+          "dfb_index": "12",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "4",
+          "_cb_index": "12"
+        },
+        {
+          "dfb_index": "13",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "1",
+          "_cb_index": "13"
+        },
+        {
+          "dfb_index": "14",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "4",
+          "_cb_index": "14"
+        },
+        {
+          "dfb_index": "15",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "4",
+          "_cb_index": "15"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "16"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "17"
+        },
+        {
+          "dfb_index": "18",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "4",
+          "_cb_index": "18"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "19"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "20"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "8",
+          "_cb_index": "21"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "22"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "23"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "24"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "12",
+          "_cb_index": "2"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "3"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "27"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "28"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "29"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "30"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "31"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "32"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "33"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "34"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "35"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "36"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "37"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "25"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "26"
+        },
+        {
+          "dfb_index": "27",
+          "num_tiles": "1",
+          "data_format": "float32",
+          "block_count": "2",
+          "_cb_index": "27"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "28"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "29"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "30"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "31"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "18",
+          "_cb_index": "32"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "33"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "34"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "35"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "18",
+          "_cb_index": "36"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "37"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "18",
+          "_cb_index": "38"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "39"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "40"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "41"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "4",
+          "_cb_index": "42"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "43"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "44"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "45"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "46"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "47"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "48"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "1",
+          "_cb_index": "49"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "50"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(4, 1)",
+          "block_count": "2",
+          "_cb_index": "51"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 4)",
+          "block_count": "2",
+          "_cb_index": "52"
+        },
+        {
+          "tensor": "_DTypeOnlyTensor(dtype=torch.float32)",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "53"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "1",
+          "_cb_index": "54"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "55"
+        },
+        {
+          "tensor": "_StubTtnnTensor(shape=(1792, 576), dtype=torch.bfloat16, layout='TILE_LAYOUT', mem='DRAM')",
+          "shape": "(1, 1)",
+          "block_count": "2",
+          "_cb_index": "56"
+        }
+      ],
+      "cb_core_ranges": [
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            5,
+            0
+          ],
+          "end": [
+            10,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        },
+        {
+          "start": [
+            0,
+            0
+          ],
+          "end": [
+            4,
+            9
+          ]
+        }
+      ]
+    }
+  },
+  "total_cb_descriptors": 142,
+  "total_physical_alias_slots": 136,
+  "segments": {
+    "projection_rows": {
+      "core_range": {
+        "start": [
+          0,
+          0
+        ],
+        "end": [
+          4,
+          9
+        ]
+      },
+      "physical_slots": 58,
+      "logical_cbs": 63,
+      "descriptor_compile_arg_offset": 0,
+      "l1_bytes_per_core": 835584,
+      "logical_cb_formats": [
+        {
+          "logical_index": 0,
+          "alias_slot": 0,
+          "dtype": "bf16",
+          "tile_capacity": 48,
+          "page_bytes": 2048,
+          "physical_bytes": 98304,
+          "compile_argument_index": 0,
+          "artifact_alias_slot": 0
+        },
+        {
+          "logical_index": 1,
+          "alias_slot": 0,
+          "dtype": "fp32",
+          "tile_capacity": 24,
+          "page_bytes": 4096,
+          "physical_bytes": 98304,
+          "compile_argument_index": 1,
+          "artifact_alias_slot": 0
+        },
+        {
+          "logical_index": 2,
+          "alias_slot": 1,
+          "dtype": "bf16",
+          "tile_capacity": 48,
+          "page_bytes": 2048,
+          "physical_bytes": 98304,
+          "compile_argument_index": 2,
+          "artifact_alias_slot": 1
+        },
+        {
+          "logical_index": 3,
+          "alias_slot": 1,
+          "dtype": "fp32",
+          "tile_capacity": 24,
+          "page_bytes": 4096,
+          "physical_bytes": 98304,
+          "compile_argument_index": 3,
+          "artifact_alias_slot": 1
+        },
+        {
+          "logical_index": 4,
+          "alias_slot": 2,
+          "dtype": "bf16",
+          "tile_capacity": 48,
+          "page_bytes": 2048,
+          "physical_bytes": 98304,
+          "compile_argument_index": 4,
+          "artifact_alias_slot": 2
+        },
+        {
+          "logical_index": 5,
+          "alias_slot": 2,
+          "dtype": "fp32",
+          "tile_capacity": 24,
+          "page_bytes": 4096,
+          "physical_bytes": 98304,
+          "compile_argument_index": 5,
+          "artifact_alias_slot": 2
+        },
+        {
+          "logical_index": 6,
+          "alias_slot": 3,
+          "dtype": "bf16",
+          "tile_capacity": 36,
+          "page_bytes": 2048,
+          "physical_bytes": 73728,
+          "compile_argument_index": 6,
+          "artifact_alias_slot": 3
+        },
+        {
+          "logical_index": 7,
+          "alias_slot": 3,
+          "dtype": "fp32",
+          "tile_capacity": 18,
+          "page_bytes": 4096,
+          "physical_bytes": 73728,
+          "compile_argument_index": 7,
+          "artifact_alias_slot": 3
+        },
+        {
+          "logical_index": 8,
+          "alias_slot": 4,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 8,
+          "artifact_alias_slot": 4
+        },
+        {
+          "logical_index": 9,
+          "alias_slot": 5,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 9,
+          "artifact_alias_slot": 5
+        },
+        {
+          "logical_index": 10,
+          "alias_slot": 6,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 10,
+          "artifact_alias_slot": 6
+        },
+        {
+          "logical_index": 11,
+          "alias_slot": 7,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 11,
+          "artifact_alias_slot": 7
+        },
+        {
+          "logical_index": 12,
+          "alias_slot": 8,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 12,
+          "artifact_alias_slot": 8
+        },
+        {
+          "logical_index": 13,
+          "alias_slot": 9,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 13,
+          "artifact_alias_slot": 9
+        },
+        {
+          "logical_index": 14,
+          "alias_slot": 10,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 14,
+          "artifact_alias_slot": 10
+        },
+        {
+          "logical_index": 15,
+          "alias_slot": 11,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 15,
+          "artifact_alias_slot": 11
+        },
+        {
+          "logical_index": 16,
+          "alias_slot": 12,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 16,
+          "artifact_alias_slot": 12
+        },
+        {
+          "logical_index": 17,
+          "alias_slot": 13,
+          "dtype": "bf16",
+          "tile_capacity": 5,
+          "page_bytes": 2048,
+          "physical_bytes": 10240,
+          "compile_argument_index": 17,
+          "artifact_alias_slot": 13
+        },
+        {
+          "logical_index": 18,
+          "alias_slot": 14,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 18,
+          "artifact_alias_slot": 14
+        },
+        {
+          "logical_index": 19,
+          "alias_slot": 15,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 19,
+          "artifact_alias_slot": 15
+        },
+        {
+          "logical_index": 20,
+          "alias_slot": 16,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 20,
+          "artifact_alias_slot": 16
+        },
+        {
+          "logical_index": 21,
+          "alias_slot": 17,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 21,
+          "artifact_alias_slot": 17
+        },
+        {
+          "logical_index": 22,
+          "alias_slot": 18,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 22,
+          "artifact_alias_slot": 18
+        },
+        {
+          "logical_index": 23,
+          "alias_slot": 18,
+          "dtype": "fp32",
+          "tile_capacity": 2,
+          "page_bytes": 4096,
+          "physical_bytes": 8192,
+          "compile_argument_index": 23,
+          "artifact_alias_slot": 18
+        },
+        {
+          "logical_index": 24,
+          "alias_slot": 19,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 24,
+          "artifact_alias_slot": 19
+        },
+        {
+          "logical_index": 25,
+          "alias_slot": 20,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 25,
+          "artifact_alias_slot": 20
+        },
+        {
+          "logical_index": 26,
+          "alias_slot": 21,
+          "dtype": "fp32",
+          "tile_capacity": 2,
+          "page_bytes": 4096,
+          "physical_bytes": 8192,
+          "compile_argument_index": 26,
+          "artifact_alias_slot": 21
+        },
+        {
+          "logical_index": 27,
+          "alias_slot": 22,
+          "dtype": "fp32",
+          "tile_capacity": 2,
+          "page_bytes": 4096,
+          "physical_bytes": 8192,
+          "compile_argument_index": 27,
+          "artifact_alias_slot": 22
+        },
+        {
+          "logical_index": 28,
+          "alias_slot": 23,
+          "dtype": "fp32",
+          "tile_capacity": 2,
+          "page_bytes": 4096,
+          "physical_bytes": 8192,
+          "compile_argument_index": 28,
+          "artifact_alias_slot": 23
+        },
+        {
+          "logical_index": 29,
+          "alias_slot": 24,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 29,
+          "artifact_alias_slot": 24
+        },
+        {
+          "logical_index": 30,
+          "alias_slot": 25,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 30,
+          "artifact_alias_slot": 25
+        },
+        {
+          "logical_index": 31,
+          "alias_slot": 26,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 31,
+          "artifact_alias_slot": 26
+        },
+        {
+          "logical_index": 32,
+          "alias_slot": 27,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 32,
+          "artifact_alias_slot": 27
+        },
+        {
+          "logical_index": 33,
+          "alias_slot": 28,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 33,
+          "artifact_alias_slot": 28
+        },
+        {
+          "logical_index": 34,
+          "alias_slot": 29,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 34,
+          "artifact_alias_slot": 29
+        },
+        {
+          "logical_index": 35,
+          "alias_slot": 30,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 35,
+          "artifact_alias_slot": 30
+        },
+        {
+          "logical_index": 36,
+          "alias_slot": 31,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 36,
+          "artifact_alias_slot": 31
+        },
+        {
+          "logical_index": 37,
+          "alias_slot": 32,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 37,
+          "artifact_alias_slot": 32
+        },
+        {
+          "logical_index": 38,
+          "alias_slot": 33,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 38,
+          "artifact_alias_slot": 33
+        },
+        {
+          "logical_index": 39,
+          "alias_slot": 34,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 39,
+          "artifact_alias_slot": 34
+        },
+        {
+          "logical_index": 40,
+          "alias_slot": 35,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 40,
+          "artifact_alias_slot": 35
+        },
+        {
+          "logical_index": 41,
+          "alias_slot": 36,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 41,
+          "artifact_alias_slot": 36
+        },
+        {
+          "logical_index": 42,
+          "alias_slot": 37,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 42,
+          "artifact_alias_slot": 37
+        },
+        {
+          "logical_index": 43,
+          "alias_slot": 38,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 43,
+          "artifact_alias_slot": 38
+        },
+        {
+          "logical_index": 44,
+          "alias_slot": 39,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 44,
+          "artifact_alias_slot": 39
+        },
+        {
+          "logical_index": 45,
+          "alias_slot": 40,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 45,
+          "artifact_alias_slot": 40
+        },
+        {
+          "logical_index": 46,
+          "alias_slot": 41,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 46,
+          "artifact_alias_slot": 41
+        },
+        {
+          "logical_index": 47,
+          "alias_slot": 42,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 47,
+          "artifact_alias_slot": 42
+        },
+        {
+          "logical_index": 48,
+          "alias_slot": 43,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 48,
+          "artifact_alias_slot": 43
+        },
+        {
+          "logical_index": 49,
+          "alias_slot": 44,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 49,
+          "artifact_alias_slot": 44
+        },
+        {
+          "logical_index": 50,
+          "alias_slot": 45,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 50,
+          "artifact_alias_slot": 45
+        },
+        {
+          "logical_index": 51,
+          "alias_slot": 46,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 51,
+          "artifact_alias_slot": 46
+        },
+        {
+          "logical_index": 52,
+          "alias_slot": 47,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 52,
+          "artifact_alias_slot": 47
+        },
+        {
+          "logical_index": 53,
+          "alias_slot": 48,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 53,
+          "artifact_alias_slot": 48
+        },
+        {
+          "logical_index": 54,
+          "alias_slot": 49,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 54,
+          "artifact_alias_slot": 49
+        },
+        {
+          "logical_index": 55,
+          "alias_slot": 50,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 55,
+          "artifact_alias_slot": 50
+        },
+        {
+          "logical_index": 56,
+          "alias_slot": 51,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 56,
+          "artifact_alias_slot": 51
+        },
+        {
+          "logical_index": 57,
+          "alias_slot": 52,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 57,
+          "artifact_alias_slot": 52
+        },
+        {
+          "logical_index": 58,
+          "alias_slot": 53,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 58,
+          "artifact_alias_slot": 53
+        },
+        {
+          "logical_index": 59,
+          "alias_slot": 54,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 59,
+          "artifact_alias_slot": 54
+        },
+        {
+          "logical_index": 60,
+          "alias_slot": 55,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 60,
+          "artifact_alias_slot": 55
+        },
+        {
+          "logical_index": 61,
+          "alias_slot": 56,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 61,
+          "artifact_alias_slot": 56
+        },
+        {
+          "logical_index": 62,
+          "alias_slot": 57,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 62,
+          "artifact_alias_slot": 57
+        }
+      ],
+      "kernel_sources": {
+        "reader": "layer_backward_projection_rows_reader.cpp",
+        "compute": "layer_backward_projection_rows_compute.cpp",
+        "writer": "layer_backward_projection_rows_writer.cpp"
+      },
+      "kernel_tensor_indices": {
+        "reader": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33
+        ],
+        "compute": [],
+        "writer": [
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41
+        ]
+      },
+      "phase_kernel_sources": {
+        "mlp": {
+          "reader": "layer_backward_projection_rows_mlp_reader.cpp",
+          "compute": "layer_backward_projection_rows_mlp_compute.cpp",
+          "writer": "layer_backward_projection_rows_mlp_writer.cpp"
+        },
+        "attention": {
+          "reader": "layer_backward_projection_rows_attention_reader.cpp",
+          "compute": "layer_backward_projection_rows_attention_compute.cpp",
+          "writer": "layer_backward_projection_rows_attention_writer.cpp"
+        }
+      },
+      "phase_kernel_tensor_indices": {
+        "mlp": {
+          "reader": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16
+          ],
+          "compute": [],
+          "writer": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40
+          ]
+        },
+        "attention": {
+          "reader": [
+            17,
+            18,
+            19,
+            20,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33
+          ],
+          "compute": [],
+          "writer": [
+            41
+          ]
+        }
+      },
+      "phase_cb_argument_maps": {
+        "mlp": {
+          "0": 21,
+          "1": 12,
+          "2": 26,
+          "3": 33,
+          "4": 11,
+          "5": 8,
+          "6": 9,
+          "7": 23,
+          "8": 35,
+          "9": 20,
+          "10": 13,
+          "11": 14,
+          "12": 15,
+          "13": 7,
+          "14": 24,
+          "15": 25,
+          "16": 16,
+          "17": 10,
+          "18": 17,
+          "19": 18,
+          "20": 27,
+          "21": 36,
+          "22": 29,
+          "23": 30,
+          "24": 31,
+          "38": 19,
+          "39": 32,
+          "40": 0,
+          "41": 2,
+          "42": 4,
+          "43": 28,
+          "44": 34
+        },
+        "attention": {
+          "0": 29,
+          "1": 30,
+          "2": 26,
+          "3": 38,
+          "4": 4,
+          "5": 0,
+          "6": 2,
+          "7": 55,
+          "8": 17,
+          "9": 10,
+          "10": 12,
+          "11": 11,
+          "12": 18,
+          "13": 50,
+          "14": 56,
+          "15": 31,
+          "16": 19,
+          "17": 32,
+          "18": 13,
+          "19": 14,
+          "20": 51,
+          "21": 57,
+          "22": 33,
+          "23": 34,
+          "24": 35,
+          "63": 36,
+          "64": 37,
+          "65": 27,
+          "66": 58,
+          "67": 59,
+          "68": 39,
+          "69": 40,
+          "70": 6,
+          "71": 20,
+          "72": 41,
+          "73": 42,
+          "74": 8,
+          "75": 21,
+          "76": 9,
+          "77": 52,
+          "78": 43,
+          "79": 22,
+          "80": 24,
+          "81": 53,
+          "82": 60,
+          "83": 44,
+          "84": 45,
+          "85": 46,
+          "86": 28,
+          "87": 25,
+          "88": 47,
+          "89": 15,
+          "90": 16,
+          "91": 54,
+          "92": 61,
+          "93": 48,
+          "94": 49
+        }
+      },
+      "phase_logical_cb_maps": {
+        "mlp": {
+          "cb27": 0,
+          "cb28": 2,
+          "cb29": 4,
+          "cb13": 7,
+          "cb5": 8,
+          "cb6": 9,
+          "cb17": 10,
+          "cb4": 11,
+          "cb1": 12,
+          "cb10": 13,
+          "cb11": 14,
+          "cb12": 15,
+          "cb16": 16,
+          "cb18": 17,
+          "cb19": 18,
+          "cb25": 19,
+          "cb9": 20,
+          "cb0": 21,
+          "cb7": 23,
+          "cb14": 24,
+          "cb15": 25,
+          "cb2": 26,
+          "cb20": 27,
+          "cb30": 28,
+          "cb22": 29,
+          "cb23": 30,
+          "cb24": 31,
+          "cb26": 32,
+          "cb3": 33,
+          "cb31": 34,
+          "cb8": 35,
+          "cb21": 36
+        },
+        "attention": {
+          "cb5": 0,
+          "cb6": 2,
+          "cb4": 4,
+          "cb32": 6,
+          "cb36": 8,
+          "cb38": 9,
+          "cb9": 10,
+          "cb11": 11,
+          "cb10": 12,
+          "cb18": 13,
+          "cb19": 14,
+          "cb51": 15,
+          "cb52": 16,
+          "cb8": 17,
+          "cb12": 18,
+          "cb16": 19,
+          "cb33": 20,
+          "cb37": 21,
+          "cb41": 22,
+          "cb42": 24,
+          "cb49": 25,
+          "cb2": 26,
+          "cb27": 27,
+          "cb48": 28,
+          "cb0": 29,
+          "cb1": 30,
+          "cb15": 31,
+          "cb17": 32,
+          "cb22": 33,
+          "cb23": 34,
+          "cb24": 35,
+          "cb25": 36,
+          "cb26": 37,
+          "cb3": 38,
+          "cb30": 39,
+          "cb31": 40,
+          "cb34": 41,
+          "cb35": 42,
+          "cb40": 43,
+          "cb45": 44,
+          "cb46": 45,
+          "cb47": 46,
+          "cb50": 47,
+          "cb55": 48,
+          "cb56": 49,
+          "cb13": 50,
+          "cb20": 51,
+          "cb39": 52,
+          "cb43": 53,
+          "cb53": 54,
+          "cb7": 55,
+          "cb14": 56,
+          "cb21": 57,
+          "cb28": 58,
+          "cb29": 59,
+          "cb44": 60,
+          "cb54": 61
+        }
+      }
+    },
+    "middle_rows": {
+      "core_range": {
+        "start": [
+          5,
+          0
+        ],
+        "end": [
+          9,
+          9
+        ]
+      },
+      "physical_slots": 39,
+      "logical_cbs": 40,
+      "descriptor_compile_arg_offset": 63,
+      "l1_bytes_per_core": 657408,
+      "logical_cb_formats": [
+        {
+          "logical_index": 0,
+          "alias_slot": 0,
+          "dtype": "bf16",
+          "tile_capacity": 48,
+          "page_bytes": 2048,
+          "physical_bytes": 98304,
+          "compile_argument_index": 63,
+          "artifact_alias_slot": 58
+        },
+        {
+          "logical_index": 1,
+          "alias_slot": 1,
+          "dtype": "bf16",
+          "tile_capacity": 48,
+          "page_bytes": 2048,
+          "physical_bytes": 98304,
+          "compile_argument_index": 64,
+          "artifact_alias_slot": 59
+        },
+        {
+          "logical_index": 2,
+          "alias_slot": 2,
+          "dtype": "bf16",
+          "tile_capacity": 48,
+          "page_bytes": 2048,
+          "physical_bytes": 98304,
+          "compile_argument_index": 65,
+          "artifact_alias_slot": 60
+        },
+        {
+          "logical_index": 3,
+          "alias_slot": 3,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 66,
+          "artifact_alias_slot": 61
+        },
+        {
+          "logical_index": 4,
+          "alias_slot": 4,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 67,
+          "artifact_alias_slot": 62
+        },
+        {
+          "logical_index": 5,
+          "alias_slot": 5,
+          "dtype": "bf16",
+          "tile_capacity": 18,
+          "page_bytes": 2048,
+          "physical_bytes": 36864,
+          "compile_argument_index": 68,
+          "artifact_alias_slot": 63
+        },
+        {
+          "logical_index": 6,
+          "alias_slot": 6,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 69,
+          "artifact_alias_slot": 64
+        },
+        {
+          "logical_index": 7,
+          "alias_slot": 7,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 70,
+          "artifact_alias_slot": 65
+        },
+        {
+          "logical_index": 8,
+          "alias_slot": 7,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 71,
+          "artifact_alias_slot": 65
+        },
+        {
+          "logical_index": 9,
+          "alias_slot": 8,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 72,
+          "artifact_alias_slot": 66
+        },
+        {
+          "logical_index": 10,
+          "alias_slot": 9,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 73,
+          "artifact_alias_slot": 67
+        },
+        {
+          "logical_index": 11,
+          "alias_slot": 10,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 74,
+          "artifact_alias_slot": 68
+        },
+        {
+          "logical_index": 12,
+          "alias_slot": 11,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 75,
+          "artifact_alias_slot": 69
+        },
+        {
+          "logical_index": 13,
+          "alias_slot": 12,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 76,
+          "artifact_alias_slot": 70
+        },
+        {
+          "logical_index": 14,
+          "alias_slot": 13,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 77,
+          "artifact_alias_slot": 71
+        },
+        {
+          "logical_index": 15,
+          "alias_slot": 14,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 78,
+          "artifact_alias_slot": 72
+        },
+        {
+          "logical_index": 16,
+          "alias_slot": 15,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 79,
+          "artifact_alias_slot": 73
+        },
+        {
+          "logical_index": 17,
+          "alias_slot": 16,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 80,
+          "artifact_alias_slot": 74
+        },
+        {
+          "logical_index": 18,
+          "alias_slot": 17,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 81,
+          "artifact_alias_slot": 75
+        },
+        {
+          "logical_index": 19,
+          "alias_slot": 18,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 82,
+          "artifact_alias_slot": 76
+        },
+        {
+          "logical_index": 20,
+          "alias_slot": 19,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 83,
+          "artifact_alias_slot": 77
+        },
+        {
+          "logical_index": 21,
+          "alias_slot": 20,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 84,
+          "artifact_alias_slot": 78
+        },
+        {
+          "logical_index": 22,
+          "alias_slot": 21,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 85,
+          "artifact_alias_slot": 79
+        },
+        {
+          "logical_index": 23,
+          "alias_slot": 22,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 86,
+          "artifact_alias_slot": 80
+        },
+        {
+          "logical_index": 24,
+          "alias_slot": 23,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 87,
+          "artifact_alias_slot": 81
+        },
+        {
+          "logical_index": 25,
+          "alias_slot": 24,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 88,
+          "artifact_alias_slot": 82
+        },
+        {
+          "logical_index": 26,
+          "alias_slot": 25,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 89,
+          "artifact_alias_slot": 83
+        },
+        {
+          "logical_index": 27,
+          "alias_slot": 26,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 90,
+          "artifact_alias_slot": 84
+        },
+        {
+          "logical_index": 28,
+          "alias_slot": 27,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 91,
+          "artifact_alias_slot": 85
+        },
+        {
+          "logical_index": 29,
+          "alias_slot": 28,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 92,
+          "artifact_alias_slot": 86
+        },
+        {
+          "logical_index": 30,
+          "alias_slot": 29,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 93,
+          "artifact_alias_slot": 87
+        },
+        {
+          "logical_index": 31,
+          "alias_slot": 30,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 94,
+          "artifact_alias_slot": 88
+        },
+        {
+          "logical_index": 32,
+          "alias_slot": 31,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 95,
+          "artifact_alias_slot": 89
+        },
+        {
+          "logical_index": 33,
+          "alias_slot": 32,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 96,
+          "artifact_alias_slot": 90
+        },
+        {
+          "logical_index": 34,
+          "alias_slot": 33,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 97,
+          "artifact_alias_slot": 91
+        },
+        {
+          "logical_index": 35,
+          "alias_slot": 34,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 98,
+          "artifact_alias_slot": 92
+        },
+        {
+          "logical_index": 36,
+          "alias_slot": 35,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 99,
+          "artifact_alias_slot": 93
+        },
+        {
+          "logical_index": 37,
+          "alias_slot": 36,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 100,
+          "artifact_alias_slot": 94
+        },
+        {
+          "logical_index": 38,
+          "alias_slot": 37,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 101,
+          "artifact_alias_slot": 95
+        },
+        {
+          "logical_index": 39,
+          "alias_slot": 38,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 102,
+          "artifact_alias_slot": 96
+        }
+      ],
+      "kernel_sources": {
+        "reader": "layer_backward_middle_rows_reader.cpp",
+        "compute": "layer_backward_middle_rows_compute.cpp",
+        "writer": "layer_backward_middle_rows_writer.cpp"
+      },
+      "kernel_tensor_indices": {
+        "reader": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          21,
+          22,
+          33
+        ],
+        "compute": [],
+        "writer": [
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41
+        ]
+      },
+      "phase_kernel_sources": {
+        "mlp": {
+          "reader": "layer_backward_middle_rows_mlp_reader.cpp",
+          "compute": "layer_backward_middle_rows_mlp_compute.cpp",
+          "writer": "layer_backward_middle_rows_mlp_writer.cpp"
+        },
+        "attention": {
+          "reader": "layer_backward_middle_rows_attention_reader.cpp",
+          "compute": "layer_backward_middle_rows_attention_compute.cpp",
+          "writer": "layer_backward_middle_rows_attention_writer.cpp"
+        }
+      },
+      "phase_kernel_tensor_indices": {
+        "mlp": {
+          "reader": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16
+          ],
+          "compute": [],
+          "writer": [
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40
+          ]
+        },
+        "attention": {
+          "reader": [
+            21,
+            22,
+            33
+          ],
+          "compute": [],
+          "writer": [
+            41
+          ]
+        }
+      },
+      "phase_cb_argument_maps": {
+        "mlp": {
+          "0": 77,
+          "1": 78,
+          "2": 73,
+          "3": 92,
+          "4": 66,
+          "5": 67,
+          "6": 68,
+          "7": 76,
+          "8": 94,
+          "9": 70,
+          "10": 79,
+          "11": 80,
+          "12": 81,
+          "13": 72,
+          "14": 86,
+          "15": 87,
+          "16": 82,
+          "17": 69,
+          "18": 83,
+          "19": 84,
+          "20": 74,
+          "21": 95,
+          "22": 88,
+          "23": 89,
+          "24": 90,
+          "38": 85,
+          "39": 91,
+          "40": 63,
+          "41": 64,
+          "42": 65,
+          "43": 75,
+          "44": 93
+        },
+        "attention": {
+          "25": 71,
+          "26": 72,
+          "27": 88,
+          "28": 66,
+          "29": 67,
+          "30": 68,
+          "31": 69,
+          "32": 101,
+          "33": 85,
+          "34": 98,
+          "35": 64,
+          "36": 77,
+          "37": 73,
+          "38": 99,
+          "39": 74,
+          "40": 75,
+          "41": 78,
+          "42": 86,
+          "43": 76,
+          "44": 79,
+          "45": 80,
+          "46": 65,
+          "47": 87,
+          "48": 81,
+          "49": 82,
+          "50": 63,
+          "51": 83,
+          "52": 100,
+          "53": 89,
+          "54": 90,
+          "55": 91,
+          "56": 84,
+          "57": 92,
+          "58": 93,
+          "59": 94,
+          "60": 95,
+          "61": 96,
+          "62": 97
+        }
+      },
+      "phase_logical_cb_maps": {
+        "mlp": {
+          "cb27": 0,
+          "cb28": 1,
+          "cb29": 2,
+          "cb4": 3,
+          "cb5": 4,
+          "cb6": 5,
+          "cb17": 6,
+          "cb9": 7,
+          "cb13": 9,
+          "cb2": 10,
+          "cb20": 11,
+          "cb30": 12,
+          "cb7": 13,
+          "cb0": 14,
+          "cb1": 15,
+          "cb10": 16,
+          "cb11": 17,
+          "cb12": 18,
+          "cb16": 19,
+          "cb18": 20,
+          "cb19": 21,
+          "cb25": 22,
+          "cb14": 23,
+          "cb15": 24,
+          "cb22": 25,
+          "cb23": 26,
+          "cb24": 27,
+          "cb26": 28,
+          "cb3": 29,
+          "cb31": 30,
+          "cb8": 31,
+          "cb21": 32
+        },
+        "attention": {
+          "cb2": 0,
+          "cb10": 1,
+          "cb21": 2,
+          "cb26": 3,
+          "cb4": 4,
+          "cb5": 5,
+          "cb6": 6,
+          "cb0": 8,
+          "cb1": 9,
+          "cb12": 10,
+          "cb14": 11,
+          "cb15": 12,
+          "cb18": 13,
+          "cb11": 14,
+          "cb16": 15,
+          "cb19": 16,
+          "cb20": 17,
+          "cb23": 18,
+          "cb24": 19,
+          "cb3": 20,
+          "cb31": 21,
+          "cb8": 22,
+          "cb17": 23,
+          "cb22": 24,
+          "cb25": 25,
+          "cb28": 26,
+          "cb29": 27,
+          "cb30": 28,
+          "cb32": 29,
+          "cb33": 30,
+          "cb34": 31,
+          "cb35": 32,
+          "cb36": 33,
+          "cb37": 34,
+          "cb9": 35,
+          "cb13": 36,
+          "cb27": 37,
+          "cb7": 38
+        }
+      }
+    },
+    "edge_column": {
+      "core_range": {
+        "start": [
+          10,
+          0
+        ],
+        "end": [
+          10,
+          9
+        ]
+      },
+      "physical_slots": 39,
+      "logical_cbs": 39,
+      "descriptor_compile_arg_offset": 103,
+      "l1_bytes_per_core": 448512,
+      "logical_cb_formats": [
+        {
+          "logical_index": 0,
+          "alias_slot": 0,
+          "dtype": "bf16",
+          "tile_capacity": 20,
+          "page_bytes": 2048,
+          "physical_bytes": 40960,
+          "compile_argument_index": 103,
+          "artifact_alias_slot": 97
+        },
+        {
+          "logical_index": 1,
+          "alias_slot": 1,
+          "dtype": "bf16",
+          "tile_capacity": 20,
+          "page_bytes": 2048,
+          "physical_bytes": 40960,
+          "compile_argument_index": 104,
+          "artifact_alias_slot": 98
+        },
+        {
+          "logical_index": 2,
+          "alias_slot": 2,
+          "dtype": "bf16",
+          "tile_capacity": 20,
+          "page_bytes": 2048,
+          "physical_bytes": 40960,
+          "compile_argument_index": 105,
+          "artifact_alias_slot": 99
+        },
+        {
+          "logical_index": 3,
+          "alias_slot": 3,
+          "dtype": "bf16",
+          "tile_capacity": 20,
+          "page_bytes": 2048,
+          "physical_bytes": 40960,
+          "compile_argument_index": 106,
+          "artifact_alias_slot": 100
+        },
+        {
+          "logical_index": 4,
+          "alias_slot": 4,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 107,
+          "artifact_alias_slot": 101
+        },
+        {
+          "logical_index": 5,
+          "alias_slot": 5,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 108,
+          "artifact_alias_slot": 102
+        },
+        {
+          "logical_index": 6,
+          "alias_slot": 6,
+          "dtype": "bf16",
+          "tile_capacity": 8,
+          "page_bytes": 2048,
+          "physical_bytes": 16384,
+          "compile_argument_index": 109,
+          "artifact_alias_slot": 103
+        },
+        {
+          "logical_index": 7,
+          "alias_slot": 7,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 110,
+          "artifact_alias_slot": 104
+        },
+        {
+          "logical_index": 8,
+          "alias_slot": 8,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 111,
+          "artifact_alias_slot": 105
+        },
+        {
+          "logical_index": 9,
+          "alias_slot": 9,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 112,
+          "artifact_alias_slot": 106
+        },
+        {
+          "logical_index": 10,
+          "alias_slot": 10,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 113,
+          "artifact_alias_slot": 107
+        },
+        {
+          "logical_index": 11,
+          "alias_slot": 11,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 114,
+          "artifact_alias_slot": 108
+        },
+        {
+          "logical_index": 12,
+          "alias_slot": 12,
+          "dtype": "fp32",
+          "tile_capacity": 4,
+          "page_bytes": 4096,
+          "physical_bytes": 16384,
+          "compile_argument_index": 115,
+          "artifact_alias_slot": 109
+        },
+        {
+          "logical_index": 13,
+          "alias_slot": 13,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 116,
+          "artifact_alias_slot": 110
+        },
+        {
+          "logical_index": 14,
+          "alias_slot": 14,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 117,
+          "artifact_alias_slot": 111
+        },
+        {
+          "logical_index": 15,
+          "alias_slot": 15,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 118,
+          "artifact_alias_slot": 112
+        },
+        {
+          "logical_index": 16,
+          "alias_slot": 16,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 119,
+          "artifact_alias_slot": 113
+        },
+        {
+          "logical_index": 17,
+          "alias_slot": 17,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 120,
+          "artifact_alias_slot": 114
+        },
+        {
+          "logical_index": 18,
+          "alias_slot": 18,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 121,
+          "artifact_alias_slot": 115
+        },
+        {
+          "logical_index": 19,
+          "alias_slot": 19,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 122,
+          "artifact_alias_slot": 116
+        },
+        {
+          "logical_index": 20,
+          "alias_slot": 20,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 123,
+          "artifact_alias_slot": 117
+        },
+        {
+          "logical_index": 21,
+          "alias_slot": 21,
+          "dtype": "bf16",
+          "tile_capacity": 4,
+          "page_bytes": 2048,
+          "physical_bytes": 8192,
+          "compile_argument_index": 124,
+          "artifact_alias_slot": 118
+        },
+        {
+          "logical_index": 22,
+          "alias_slot": 22,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 125,
+          "artifact_alias_slot": 119
+        },
+        {
+          "logical_index": 23,
+          "alias_slot": 23,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 126,
+          "artifact_alias_slot": 120
+        },
+        {
+          "logical_index": 24,
+          "alias_slot": 24,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 127,
+          "artifact_alias_slot": 121
+        },
+        {
+          "logical_index": 25,
+          "alias_slot": 25,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 128,
+          "artifact_alias_slot": 122
+        },
+        {
+          "logical_index": 26,
+          "alias_slot": 26,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 129,
+          "artifact_alias_slot": 123
+        },
+        {
+          "logical_index": 27,
+          "alias_slot": 27,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 130,
+          "artifact_alias_slot": 124
+        },
+        {
+          "logical_index": 28,
+          "alias_slot": 28,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 131,
+          "artifact_alias_slot": 125
+        },
+        {
+          "logical_index": 29,
+          "alias_slot": 29,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 132,
+          "artifact_alias_slot": 126
+        },
+        {
+          "logical_index": 30,
+          "alias_slot": 30,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 133,
+          "artifact_alias_slot": 127
+        },
+        {
+          "logical_index": 31,
+          "alias_slot": 31,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 134,
+          "artifact_alias_slot": 128
+        },
+        {
+          "logical_index": 32,
+          "alias_slot": 32,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 135,
+          "artifact_alias_slot": 129
+        },
+        {
+          "logical_index": 33,
+          "alias_slot": 33,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 136,
+          "artifact_alias_slot": 130
+        },
+        {
+          "logical_index": 34,
+          "alias_slot": 34,
+          "dtype": "bf16",
+          "tile_capacity": 2,
+          "page_bytes": 2048,
+          "physical_bytes": 4096,
+          "compile_argument_index": 137,
+          "artifact_alias_slot": 131
+        },
+        {
+          "logical_index": 35,
+          "alias_slot": 35,
+          "dtype": "fp32",
+          "tile_capacity": 1,
+          "page_bytes": 4096,
+          "physical_bytes": 4096,
+          "compile_argument_index": 138,
+          "artifact_alias_slot": 132
+        },
+        {
+          "logical_index": 36,
+          "alias_slot": 36,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 139,
+          "artifact_alias_slot": 133
+        },
+        {
+          "logical_index": 37,
+          "alias_slot": 37,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 140,
+          "artifact_alias_slot": 134
+        },
+        {
+          "logical_index": 38,
+          "alias_slot": 38,
+          "dtype": "bf16",
+          "tile_capacity": 1,
+          "page_bytes": 2048,
+          "physical_bytes": 2048,
+          "compile_argument_index": 141,
+          "artifact_alias_slot": 135
+        }
+      ],
+      "kernel_sources": {
+        "reader": "layer_backward_edge_column_reader.cpp",
+        "compute": "layer_backward_edge_column_compute.cpp",
+        "writer": "layer_backward_edge_column_writer.cpp"
+      },
+      "kernel_tensor_indices": {
+        "reader": [
+          5,
+          6,
+          7,
+          21,
+          22,
+          33
+        ],
+        "compute": [],
+        "writer": [
+          41
+        ]
+      },
+      "phase_kernel_sources": {
+        "mlp": {
+          "reader": "layer_backward_edge_column_mlp_reader.cpp",
+          "compute": "layer_backward_edge_column_mlp_compute.cpp",
+          "writer": "layer_backward_edge_column_mlp_writer.cpp"
+        },
+        "attention": {
+          "reader": "layer_backward_edge_column_attention_reader.cpp",
+          "compute": "layer_backward_edge_column_attention_compute.cpp",
+          "writer": "layer_backward_edge_column_attention_writer.cpp"
+        }
+      },
+      "phase_kernel_tensor_indices": {
+        "mlp": {
+          "reader": [
+            5,
+            6,
+            7
+          ],
+          "compute": [],
+          "writer": []
+        },
+        "attention": {
+          "reader": [
+            21,
+            22,
+            33
+          ],
+          "compute": [],
+          "writer": [
+            41
+          ]
+        }
+      },
+      "phase_cb_argument_maps": {
+        "mlp": {
+          "25": 107,
+          "26": 108,
+          "27": 121,
+          "28": 123,
+          "29": 124,
+          "30": 125,
+          "31": 126,
+          "32": 127,
+          "33": 128,
+          "34": 129,
+          "35": 103,
+          "36": 104,
+          "37": 109,
+          "45": 116,
+          "46": 117,
+          "47": 118,
+          "48": 119,
+          "49": 120,
+          "50": 122,
+          "51": 105,
+          "52": 106
+        },
+        "attention": {
+          "25": 110,
+          "26": 111,
+          "27": 127,
+          "28": 106,
+          "29": 107,
+          "30": 108,
+          "31": 109,
+          "32": 140,
+          "33": 124,
+          "34": 137,
+          "35": 104,
+          "36": 116,
+          "37": 112,
+          "38": 138,
+          "39": 113,
+          "40": 114,
+          "41": 117,
+          "42": 125,
+          "43": 115,
+          "44": 118,
+          "45": 119,
+          "46": 105,
+          "47": 126,
+          "48": 120,
+          "49": 121,
+          "50": 103,
+          "51": 122,
+          "52": 139,
+          "53": 128,
+          "54": 129,
+          "55": 130,
+          "56": 123,
+          "57": 131,
+          "58": 132,
+          "59": 133,
+          "60": 134,
+          "61": 135,
+          "62": 136
+        }
+      },
+      "phase_logical_cb_maps": {
+        "mlp": {
+          "cb10": 0,
+          "cb11": 1,
+          "cb21": 2,
+          "cb22": 3,
+          "cb0": 4,
+          "cb1": 5,
+          "cb12": 6,
+          "cb15": 13,
+          "cb16": 14,
+          "cb17": 15,
+          "cb18": 16,
+          "cb19": 17,
+          "cb2": 18,
+          "cb20": 19,
+          "cb3": 20,
+          "cb4": 21,
+          "cb5": 22,
+          "cb6": 23,
+          "cb7": 24,
+          "cb8": 25,
+          "cb9": 26
+        },
+        "attention": {
+          "cb2": 0,
+          "cb10": 1,
+          "cb21": 2,
+          "cb26": 3,
+          "cb4": 4,
+          "cb5": 5,
+          "cb6": 6,
+          "cb0": 7,
+          "cb1": 8,
+          "cb12": 9,
+          "cb14": 10,
+          "cb15": 11,
+          "cb18": 12,
+          "cb11": 13,
+          "cb16": 14,
+          "cb19": 15,
+          "cb20": 16,
+          "cb23": 17,
+          "cb24": 18,
+          "cb3": 19,
+          "cb31": 20,
+          "cb8": 21,
+          "cb17": 22,
+          "cb22": 23,
+          "cb25": 24,
+          "cb28": 25,
+          "cb29": 26,
+          "cb30": 27,
+          "cb32": 28,
+          "cb33": 29,
+          "cb34": 30,
+          "cb35": 31,
+          "cb36": 32,
+          "cb37": 33,
+          "cb9": 34,
+          "cb13": 35,
+          "cb27": 36,
+          "cb7": 37
+        }
+      }
+    }
+  },
+  "remaining_physical_epochs": [
+    "post_attention_rmsnorm_backward_and_residual",
+    "input_rmsnorm_backward_and_final_residual",
+    "device_epoch_barriers"
+  ]
+}
