@@ -201,6 +201,7 @@ class ResidentQualification:
     rank: int
     batch_size: int
     sequence_length: int
+    target_signature: tuple[tuple[str, int], ...]
     contract: str
     source_bundle: str
     descriptor_bundle: str
@@ -212,12 +213,14 @@ class ResidentQualification:
 _RESIDENT_QUALIFICATIONS = (
     ResidentQualification(
         "738434b016f9144dce8cc44c", 8, 1, 128,
+        tuple((role, 30) for role in ("q", "k", "v", "o", "gate", "up", "down")),
         "smol_geometry_20_step_exact",
         "generated/smollm2_resident_layer_backward_sequence_v8",
         "generated/adamw_descriptors_smollm2_30layer_exact_v1",
     ),
     ResidentQualification(
         "491a95b4f0dc7ec66c77a07a", 16, 1, 128,
+        tuple((role, 24) for role in ("q", "k", "v", "o", "gate", "up", "down")),
         "qwen_geometry_20_step_exact",
         "generated/qwen_resident_layer_backward_sequence_v12",
         "generated/adamw_descriptors_qwen_24layer_exact_v1",
@@ -451,17 +454,44 @@ def _resident_qualification(
     rank: int,
     batch_size: int,
     sequence_length: int,
+    lora_targets: tuple[LoRATargetGeometry, ...],
 ) -> ResidentQualification | None:
-    return next(
-        (
-            item for item in _RESIDENT_QUALIFICATIONS
-            if item.semantic_fingerprint == descriptor.semantic_fingerprint
-            and item.rank == rank
-            and item.batch_size == batch_size
-            and item.sequence_length == sequence_length
-        ),
-        None,
+    target_signature = tuple(sorted(
+        (item.role, item.instances) for item in lora_targets
+    ))
+    geometry_matches = (
+        item for item in _RESIDENT_QUALIFICATIONS
+        if item.semantic_fingerprint == descriptor.semantic_fingerprint
+        and item.rank == rank
+        and item.batch_size == batch_size
+        and item.sequence_length == sequence_length
     )
+    requested = dict(target_signature)
+    for item in geometry_matches:
+        physical = dict(item.target_signature)
+        # The qualified resident program has a fixed slot for all seven
+        # canonical projections.  A semantic subset is executable by packing
+        # all-zero A/B factors into inactive slots; those slots produce no
+        # output or gradient and never enter logical checkpoints/exports.
+        # Instance counts must still match exactly so partial-layer targeting
+        # cannot be mistaken for this safe fixed-ABI representation.
+        if requested and all(
+            role in physical and physical[role] == instances
+            for role, instances in requested.items()
+        ):
+            if tuple(sorted(item.target_signature)) == target_signature:
+                return item
+            return ResidentQualification(
+                semantic_fingerprint=item.semantic_fingerprint,
+                rank=item.rank,
+                batch_size=item.batch_size,
+                sequence_length=item.sequence_length,
+                target_signature=target_signature,
+                contract=f"{item.contract}_zero_inactive_targets",
+                source_bundle=item.source_bundle,
+                descriptor_bundle=item.descriptor_bundle,
+            )
+    return None
 
 
 def resident_qualification_for_plan(
@@ -474,6 +504,7 @@ def resident_qualification_for_plan(
         plan.rank,
         plan.batch_size,
         plan.sequence_length,
+        plan.lora_targets,
     )
 
 
@@ -676,7 +707,7 @@ def plan_execution(
     memory_admitted = estimated_device_bytes <= hardware.dram_bytes
 
     resident = _resident_qualification(
-        descriptor, rank, batch_size, sequence_length
+        descriptor, rank, batch_size, sequence_length, targets
     )
     if resident is not None:
         memory_plan = ExecutionMemoryPlan(

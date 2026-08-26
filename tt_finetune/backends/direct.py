@@ -1441,6 +1441,26 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         command = list(arguments)
         environment = os.environ.copy()
         environment["WANDB_MODE"] = "disabled"
+        # In an editable development install the subprocess intentionally
+        # runs from the isolated public workspace.  That workspace contains
+        # ``blackhole_training/generated`` and therefore looks like a Python
+        # namespace package.  The default setuptools editable finder is
+        # appended after PathFinder, so the empty workspace namespace can
+        # shadow the real package before the finder is consulted.  A wheel
+        # install does not have this ambiguity.  Make the source root explicit
+        # only for an actual editable checkout; installed wheels remain fully
+        # package-relative and need no path injection.
+        source_root = Path(__file__).resolve().parents[2]
+        if (
+            (source_root / "pyproject.toml").is_file()
+            and (source_root / "blackhole_training" / "__init__.py").is_file()
+        ):
+            existing_pythonpath = environment.get("PYTHONPATH")
+            environment["PYTHONPATH"] = os.pathsep.join(
+                part
+                for part in (str(source_root), existing_pythonpath)
+                if part
+            )
         if device:
             environment.update({
                 "PJRT_DEVICE": "TT",
@@ -2085,8 +2105,9 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             adapter = execution_output / "peft_adapter"
             if not pipeline.valid_peft_adapter(adapter):
                 raise RuntimeError(f"Invalid PEFT adapter: {adapter}")
-            memory_report = metrics.get("memory_accounting", {}).get(
-                "weight_memory_mode", {}
+            memory_report = (
+                metrics.get("memory_accounting", {}).get("weight_memory_mode")
+                or {}
             )
             adapter_config = self.model.adapter_config
             assert adapter_config is not None

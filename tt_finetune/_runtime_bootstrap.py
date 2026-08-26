@@ -23,6 +23,11 @@ def activate_bundled_runtime() -> Path:
     plugin = root / "pjrt_plugin_tt"
     os.environ["TT_PJRT_PLUGIN_DIR"] = str(plugin)
     os.environ["TT_METAL_RUNTIME_ROOT"] = str(plugin / "tt-metal")
+    # Native resident programs reuse selected TTNN kernel sources at lowering
+    # time.  The binary plugin already vendors the matching TT-Metal tree, so
+    # expose that package-relative tree through the conventional source-root
+    # variable as well.  Respect an explicit developer override.
+    os.environ.setdefault("TT_METAL_HOME", str(plugin / "tt-metal"))
     os.environ.setdefault("PJRT_DEVICE", "TT")
     os.environ.setdefault("XLA_STABLEHLO_COMPILE", "1")
     return root

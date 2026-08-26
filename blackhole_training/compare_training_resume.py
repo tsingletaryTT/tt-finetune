@@ -51,9 +51,8 @@ def _checkpoint_state(path: Path) -> dict[str, Any]:
 
     payload = torch.load(path, map_location="cpu", weights_only=False)
     model_state = payload.get("model_state_dict") or {}
-    optimizer_state = (
-        (payload.get("optimizer_state_dict") or {}).get("state") or {}
-    )
+    serialized_optimizer = payload.get("optimizer_state_dict") or {}
+    optimizer_state = serialized_optimizer.get("state") or {}
     model_tensors = [
         (str(name).removeprefix("_orig_mod."), value)
         for name, value in model_state.items()
@@ -75,6 +74,9 @@ def _checkpoint_state(path: Path) -> dict[str, Any]:
                 optimizer_tensors.append(
                     (f"{parameter}.{name}", value)
                 )
+    resident_state = serialized_optimizer.get("optimizer_state")
+    if torch.is_tensor(resident_state):
+        optimizer_tensors.append(("resident.optimizer_state", resident_state))
     return {
         "path": path.name,
         "sha256": _sha256(path),

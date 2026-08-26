@@ -658,6 +658,415 @@ def _tie_output_delta_into_input_checkpoint(
     }
 
 
+def _run_public_resident_training(
+    *,
+    torch,
+    config,
+    model,
+    architecture_report,
+    device_manager,
+    checkpoint_manager,
+    logger,
+    metrics,
+    publish_metrics,
+    record_stage,
+    get_dataset,
+    collate_fn_for_causal_lm,
+    stop_after: int | None,
+    profile_phases: bool,
+    profile_warmup_steps: int,
+    loss_read_interval: int,
+    audit_device_inputs: bool,
+    audit_training_state: bool,
+    compile_sequence_buckets,
+    compile_bucket_repeats: int,
+) -> dict:
+    """Run the public loop directly against the admitted resident ABI."""
+
+    from .runtime import ResidentTrainingOps, build_resident_executor
+
+    admission = getattr(model, "_tt_public_resident_admission", None)
+    if admission is None or not admission.admitted:
+        raise RuntimeError("public resident worker called without resident admission")
+    if architecture_report.executor_backend != "resident_exact":
+        raise RuntimeError(
+            "emitted resident plan and public executor admission disagree"
+        )
+    if compile_sequence_buckets is not None:
+        unsupported = sorted(
+            value
+            for value in set(map(int, compile_sequence_buckets))
+            if value <= 0
+            or value % 32
+            or value > int(config.max_length)
+        )
+        if unsupported:
+            raise ValueError(
+                "resident logical sequence buckets must be positive 32-token "
+                f"multiples no larger than {config.max_length}; got {unsupported}"
+            )
+
+    record_stage("optimizer_setup", "started")
+    resume_payload = None
+    if config.resume_from_checkpoint:
+        resume_payload = checkpoint_manager.read_selected_checkpoint()
+        if resume_payload is None:
+            raise FileNotFoundError(
+                "resume was requested but no matching checkpoint exists"
+            )
+        checkpoint_manager.restore_model_payload(resume_payload, model)
+    resumed = (
+        checkpoint_manager.checkpoint_metadata(resume_payload)
+        if resume_payload is not None else {}
+    )
+    resumed_step = int(resumed.get("step", 0))
+    resumed_epoch = int(resumed.get("epoch", 0))
+    resumed_trainer_state = resumed.get("metrics", {}).get(
+        "trainer_state", {}
+    )
+    resumed_micro_step = int(resumed_trainer_state.get("micro_step", 0))
+    resumed_batch_in_epoch = int(
+        resumed_trainer_state.get("batch_in_epoch", 0)
+    )
+
+    executor = build_resident_executor(
+        model,
+        plan=architecture_report.plan,
+        decoder_path=architecture_report.weight_map.decoder_path,
+        device=device_manager.device,
+    )
+    metrics["architecture"]["executor_backend"] = "resident_exact"
+    metrics["architecture"]["executor_fallback_reason"] = None
+    metrics["execution"] = {
+        "selected_plan": architecture_report.plan.selected_stack_backend,
+        "actual_executor": "resident_exact",
+        "fallback": None,
+        "resident": executor.report.to_dict(),
+        "persistent_physical_state": True,
+        "logical_parameter_refresh_per_step": False,
+    }
+    metrics["peft_execution_strategy"] = "resident_full_stack"
+    metrics["optimizer_tile_packed"] = True
+    metrics["optimizer_tile_packed_selected_automatically"] = True
+    if audit_training_state:
+        initial_rows = executor.packed.trainable_pages.shape[0]
+        initial_state = executor.engine.optimizer_state.detach().cpu()
+        initial_logical = executor.packed.logical_state(
+            initial_state[:initial_rows]
+        )
+        metrics["initial_training_state"] = {
+            "trainable": _tensor_digest(torch, list(initial_logical.items())),
+            "trainable_finiteness": _tensor_finiteness(
+                torch, list(initial_logical.items())
+            ),
+        }
+    record_stage("optimizer_setup", "completed")
+
+    record_stage("dataset_preparation", "started")
+    dataset = get_dataset(
+        config=config,
+        split="train",
+        collate_fn=collate_fn_for_causal_lm,
+    )
+    data_pipeline_report = (
+        dataset.pipeline_report(epoch=resumed_epoch)
+        if hasattr(dataset, "pipeline_report") else None
+    )
+    saved_data_pipeline = resumed_trainer_state.get("data_pipeline", {})
+    if (
+        saved_data_pipeline
+        and data_pipeline_report is not None
+        and saved_data_pipeline.get("contract_hash")
+        != data_pipeline_report.get("contract_hash")
+    ):
+        raise ValueError(
+            "resume dataset contract differs from the checkpoint: "
+            f"saved={saved_data_pipeline.get('contract_hash')} "
+            f"current={data_pipeline_report.get('contract_hash')}"
+        )
+    if data_pipeline_report is not None:
+        metrics["data_pipeline"] = data_pipeline_report
+    if compile_sequence_buckets is not None:
+        if not hasattr(dataset, "get_compile_warmup_dataloader"):
+            raise ValueError(
+                "the selected dataset does not support deterministic "
+                "sequence-bucket compile warmup"
+            )
+        dataloader = dataset.get_compile_warmup_dataloader(
+            compile_sequence_buckets,
+            repeats=compile_bucket_repeats,
+            epoch=resumed_epoch,
+        )
+        metrics["compile_warmup_schedule"] = dict(
+            dataset.compile_warmup_schedule
+        )
+        dataloader_factory = lambda _epoch: dataloader
+    else:
+        dataloader = dataset.get_dataloader()
+        dataloader_factory = (
+            dataset.get_dataloader_for_epoch
+            if hasattr(dataset, "get_dataloader_for_epoch")
+            else lambda _epoch: dataloader
+        )
+    steps_per_epoch = math.ceil(
+        len(dataloader) / config.gradient_accumulation_steps
+    )
+    planned_steps = (
+        config.max_steps
+        if config.max_steps is not None
+        else steps_per_epoch * config.num_epochs
+    )
+    learning_rates, warmup_steps = _scheduler_values(config, planned_steps)
+    operations = ResidentTrainingOps(
+        executor=executor,
+        device_manager=device_manager,
+        learning_rates=learning_rates,
+        beta1=config.adam_beta1,
+        beta2=config.adam_beta2,
+        epsilon=config.adam_epsilon,
+        weight_decay=config.weight_decay,
+        initial_step=resumed_step,
+        profile_phases=profile_phases,
+        audit_gradients=audit_training_state,
+        audit_device_inputs=audit_device_inputs,
+    )
+    optimizer = operations.optimizer
+    if resume_payload is not None:
+        optimizer_state = resume_payload.get("optimizer_state_dict")
+        if optimizer_state is None:
+            raise ValueError(
+                "exact resident resume requires a checkpoint saved with optimizer state"
+            )
+        operations.load_checkpoint_state(optimizer_state)
+    record_stage("dataset_preparation", "completed")
+
+    record_stage("training_schedule_setup", "started")
+    running_losses = []
+    running_seconds = []
+    running_learning_rates = []
+    checkpoint_events = []
+    batch_identity_history = []
+    compile_stage_completed = False
+
+    def trainer_checkpoint_state(state, *, batch_in_epoch=None):
+        value = {
+            "micro_step": state.micro_step,
+            "batch_in_epoch": (
+                state.batch_in_epoch
+                if batch_in_epoch is None else batch_in_epoch
+            ),
+            "resident_optimizer_step": operations.optimizer_steps,
+        }
+        if data_pipeline_report is not None:
+            value["data_pipeline"] = {
+                "algorithm": data_pipeline_report["algorithm"],
+                "contract_hash": data_pipeline_report["contract_hash"],
+                "epoch": state.epoch,
+                "batch_offset": value["batch_in_epoch"],
+                "shuffle_seed": config.seed,
+                "prefetch_state": "deterministically_reconstructed",
+            }
+        return value
+
+    def save_checkpoint(record, state, *, final=False):
+        operations.sync_model_for_checkpoint()
+        final_epoch = (
+            state.epoch
+            if state.batch_in_epoch == 0 else max(0, state.epoch - 1)
+        )
+        return checkpoint_manager.save_checkpoint(
+            model,
+            record if isinstance(record, int) else record.step,
+            final_epoch,
+            optimizer,
+            metrics={"trainer_state": trainer_checkpoint_state(state)},
+            checkpoint_name="final_model.pth" if final else None,
+        )
+
+    def on_step(record, state):
+        nonlocal compile_stage_completed
+        if not compile_stage_completed:
+            record_stage("device_compile_and_first_step", "completed")
+            record_stage("steady_training", "started")
+            compile_stage_completed = True
+        running_losses.append(record.loss)
+        running_seconds.append(record.seconds)
+        running_learning_rates.append(record.learning_rate)
+        batch_identity_history.append({
+            "step": record.step,
+            "host": operations.last_host_batch_signature,
+            "device": operations.last_device_batch_signature,
+        })
+        if (
+            record.step == 1
+            or record.step % config.steps_freq == 0
+            or record.step == planned_steps
+        ):
+            rendered = "not-read" if record.loss is None else f"{record.loss:.4f}"
+            logger.info(
+                f"tt-finetune step {record.step}/{planned_steps} | loss {rendered} | "
+                f"{record.seconds:.3f}s | {record.useful_tokens / record.seconds:.1f} tokens/s"
+            )
+        if checkpoint_manager.should_save_checkpoint(record.step):
+            path = save_checkpoint(record, state)
+            checkpoint_events.append({"step": record.step, "path": path})
+        metrics.update({
+            "global_steps": record.step,
+            "step_losses": running_losses,
+            "step_learning_rates": running_learning_rates,
+            "step_e2e_seconds": running_seconds,
+            "checkpoint_events": checkpoint_events,
+            "batch_identity_history": batch_identity_history,
+        })
+        if record.step == 1 or record.step % config.steps_freq == 0:
+            publish_metrics()
+
+    loop = TrainingLoop(
+        LoopConfig(
+            num_epochs=config.num_epochs,
+            gradient_accumulation_steps=1,
+            max_steps=stop_after if stop_after is not None else config.max_steps,
+            max_grad_norm=1.0,
+            # Keep forward, backward, clipping and AdamW under one device
+            # execution boundary.  Loss is read only after optimizer sync.
+            fuse_backward_optimizer=True,
+            loss_read_interval=loss_read_interval,
+        ),
+        operations,
+        on_step=on_step,
+    )
+    record_stage("training_schedule_setup", "completed")
+    record_stage("device_compile_and_first_step", "started")
+    state, records = loop.run(
+        dataloader_factory,
+        state=LoopState(
+            epoch=resumed_epoch,
+            optimizer_step=resumed_step,
+            micro_step=resumed_micro_step,
+            batch_in_epoch=resumed_batch_in_epoch,
+        ),
+    )
+    if not compile_stage_completed:
+        record_stage("device_compile_and_first_step", "completed")
+        record_stage("steady_training", "started")
+    record_stage("steady_training", "completed")
+
+    record_stage("checkpoint_and_export", "started")
+    checkpoint = save_checkpoint(state.optimizer_step, state, final=True)
+    checkpoint_payload = torch.load(checkpoint, map_location="cpu")
+    packed_checkpoint = checkpoint_payload.get("optimizer_state_dict", {})
+    packed_tensor = packed_checkpoint.get("optimizer_state")
+    if not isinstance(packed_tensor, torch.Tensor):
+        # Saving only the adapter is a valid user choice.  The live packed
+        # state remains available for final finiteness/audit evidence, while
+        # exact resume is intentionally unavailable unless save_optim=True.
+        packed_tensor = executor.engine.optimizer_state.detach().cpu()
+        metrics["execution"]["exact_resume_state_saved"] = False
+    else:
+        metrics["execution"]["exact_resume_state_saved"] = True
+    rows = executor.packed.trainable_pages.shape[0]
+    optimizer_sections = {
+        "parameters": executor.packed.logical_state(packed_tensor[:rows]),
+        "first_moment": executor.packed.logical_state(packed_tensor[rows:2 * rows]),
+        "second_moment": executor.packed.logical_state(packed_tensor[2 * rows:]),
+    }
+    model_state = checkpoint_payload["model_state_dict"]
+    if audit_training_state:
+        metrics["final_training_state"] = {
+            "trainable": _tensor_digest(torch, list(model_state.items())),
+            "trainable_finiteness": _tensor_finiteness(
+                torch, list(model_state.items())
+            ),
+            "optimizer_logical": _tensor_digest(
+                torch,
+                [
+                    (f"{section}.{name}", value)
+                    for section, values in optimizer_sections.items()
+                    for name, value in values.items()
+                ],
+            ),
+            "optimizer_logical_finiteness": _tensor_finiteness(
+                torch,
+                [
+                    (f"{section}.{name}", value)
+                    for section, values in optimizer_sections.items()
+                    for name, value in values.items()
+                ],
+            ),
+            "checkpoint_sha256": hashlib.sha256(
+                Path(checkpoint).read_bytes()
+            ).hexdigest(),
+        }
+    phase_seconds = {
+        name: list(values) for name, values in operations.phase_seconds.items()
+    }
+    step_seconds = [record.seconds for record in records]
+    step_summary = _timing_summary(
+        step_seconds, warmup_count=profile_warmup_steps
+    )
+    metrics.update({
+        "status": (
+            "completed" if state.optimizer_step >= planned_steps else "interrupted"
+        ),
+        "planned_optimizer_steps": planned_steps,
+        "warmup_steps": warmup_steps,
+        "global_steps": state.optimizer_step,
+        "epochs_completed": state.epoch,
+        "step_losses": [record.loss for record in records],
+        "step_learning_rates": [record.learning_rate for record in records],
+        "step_e2e_seconds": step_seconds,
+        "step_tokens_per_second": [
+            record.useful_tokens / record.seconds for record in records
+        ],
+        "step_useful_tokens": [record.useful_tokens for record in records],
+        "step_padded_tokens": [record.padded_tokens for record in records],
+        "step_sequence_lengths": [
+            list(record.sequence_lengths) for record in records
+        ],
+        "step_data_wait_seconds": [record.data_wait_seconds for record in records],
+        "checkpoint_events": checkpoint_events,
+        "batch_identity_history": batch_identity_history,
+        "gradient_clipping": {
+            "max_grad_norm": 1.0,
+            "implementation": operations.tt_clip_mode,
+            "history": [],
+        },
+        "gradient_audit": operations.gradient_audit,
+        "resident_evolving_audit": operations.evolving_audit,
+        "checkpoint": checkpoint,
+        "optimizer_placement": "resident_packed_device",
+        "phase_seconds": phase_seconds,
+        "phase_summaries": {
+            name: _timing_summary(
+                values,
+                warmup_count=0 if name == "zero_grad" else profile_warmup_steps,
+            )
+            for name, values in phase_seconds.items()
+        },
+        "step_e2e_summary": step_summary,
+        "steady_step_e2e_summary": step_summary,
+        "steady_step_seconds": step_summary["mean_seconds"],
+        "steady_measurement_steps": [
+            record.step for record in records[profile_warmup_steps:]
+        ],
+        "compile": {
+            "first_step_seconds": step_seconds[0] if step_seconds else None,
+            "compilation_excluded_from_steady_state": True,
+            "resident_executor_reused_across_steps": True,
+            "physical_sequence_bucket": int(config.max_length),
+            "logical_sequence_buckets": sorted(
+                operations.logical_sequence_lengths_seen
+            ),
+            "resident_executor_reused_across_compatible_buckets": True,
+            "per_bucket_parameter_repacking": False,
+        },
+    })
+    record_stage("checkpoint_and_export", "completed")
+    metrics["startup_profile"]["current_stage"] = "completed"
+    publish_metrics()
+    return metrics
+
+
 def run(
     config,
     *,
@@ -954,6 +1363,72 @@ def run(
             config,
             architecture_report,
         )
+        resident_admission = getattr(
+            uncompiled_model,
+            "_tt_public_resident_admission",
+            None,
+        )
+        metrics["resident_admission"] = (
+            resident_admission.to_dict()
+            if resident_admission is not None else None
+        )
+        if resident_admission is not None and resident_admission.admitted:
+            # The ordinary model intentionally remains on the host.  The
+            # resident worker packs it once, keeps the physical state
+            # authoritative across steps, and refreshes logical PEFT tensors
+            # only at checkpoint/export boundaries.
+            return _run_public_resident_training(
+                torch=torch,
+                config=config,
+                model=uncompiled_model,
+                architecture_report=architecture_report,
+                device_manager=device_manager,
+                checkpoint_manager=checkpoint_manager,
+                logger=logger,
+                metrics=metrics,
+                publish_metrics=publish_metrics,
+                record_stage=record_stage,
+                get_dataset=get_dataset,
+                collate_fn_for_causal_lm=collate_fn_for_causal_lm,
+                stop_after=stop_after,
+                profile_phases=profile_phases,
+                profile_warmup_steps=profile_warmup_steps,
+                loss_read_interval=loss_read_interval,
+                audit_device_inputs=audit_device_inputs,
+                audit_training_state=audit_training_state,
+                compile_sequence_buckets=compile_sequence_buckets,
+                compile_bucket_repeats=compile_bucket_repeats,
+            )
+        # The architecture report's executor_backend is the admitted public
+        # plan, after all training-semantic checks.  Record that boundary for
+        # the safe path too: users must never have to infer whether a resident
+        # candidate was silently replaced by ordinary autograd.
+        admitted_backend = (
+            architecture_report.executor_backend
+            if architecture_report is not None
+            else "safe_torch_xla_autograd"
+        )
+        if admitted_backend != "safe_torch_xla_autograd":
+            raise RuntimeError(
+                "public execution plan is neither admitted resident nor the "
+                f"safe executor: {admitted_backend}"
+            )
+        fallback_reason = (
+            architecture_report.executor_fallback_reason
+            if architecture_report is not None else
+            "explicit generic adapter/runtime selection"
+        )
+        metrics["execution"] = {
+            "selected_plan": "safe_torch_xla_autograd",
+            "actual_executor": "safe_torch_xla_autograd",
+            "fallback": fallback_reason,
+            "resident_candidate": (
+                architecture_report.plan.selected_stack_backend
+                if architecture_report is not None else None
+            ),
+            "persistent_physical_state": False,
+            "logical_parameter_refresh_per_step": True,
+        }
         (
             optimizer_tile_packed,
             optimizer_tile_packed_selected_automatically,
@@ -1843,6 +2318,7 @@ def run(
                     "history": gradient_norm_history,
                 },
                 "gradient_audit": operations.gradient_audit,
+                "safe_evolving_audit": operations.evolving_audit,
                 "peft_execution_paths": peft_execution_paths,
                 "moe_execution_paths": moe_execution_paths,
                 "moe_execution_contract": {

@@ -1,0 +1,224 @@
+{
+  "format_version": 1,
+  "kernels": [
+    {
+      "thread_type": "compute",
+      "cpp_source": "// Exact capturable-AdamW parameter phase.\n//\n// Reproduces:\n//   BF16(parameter * decay) -> FP32\n//   + FP32(BF16 first_moment) / FP32 denominator\n//   -> BF16 parameter\n// while forwarding the already-updated BF16 moments unchanged.\n\n#define FP32_DEST_ACC_EN 1\n\n#include \"api/compute/common.h\"\n#include \"api/compute/eltwise_binary_sfpu.h\"\n#include \"api/compute/eltwise_unary/eltwise_unary.h\"\n#include \"api/compute/eltwise_unary/typecast.h\"\n#include \"api/compute/pack.h\"\n#include \"api/compute/reg_api.h\"\n#include \"api/compute/tile_move_copy.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\n\nnamespace {\nconstexpr uint32_t cb_param = 0;\nconstexpr uint32_t cb_exp_avg = 1;\nconstexpr uint32_t cb_exp_avg_sq = 2;\nconstexpr uint32_t cb_denominator = 3;\nconstexpr uint32_t cb_decay = 4;\nconstexpr uint32_t cb_param_out = 5;\nconstexpr uint32_t cb_exp_avg_out = 6;\nconstexpr uint32_t cb_exp_avg_sq_out = 7;\nconstexpr uint32_t cb_decay_bf16 = 8;\nconstexpr uint32_t cb_update_f32 = 9;\nconstexpr uint32_t cb_param_f32 = 10;\nconstexpr uint32_t cb_m_f32 = 11;\nconstexpr uint32_t cb_sum_f32 = 12;\n\nALWI void copy_one(uint32_t input_id, uint32_t input_tile,\n                   uint32_t output_id, uint32_t output_tile) {\n    init_sfpu(input_id, output_id);\n    tile_regs_acquire();\n    copy_tile_init(input_id);\n    copy_tile(input_id, input_tile, 0);\n    tile_regs_commit();\n    tile_regs_wait();\n    PACK((pack_reconfig_data_format(output_id)));\n    pack_tile<true>(0, output_id, output_tile);\n    tile_regs_release();\n}\n}  // namespace\n\nvoid kernel_main() {\n    constexpr uint32_t total_blocks = 17184;\n    constexpr uint32_t blocks_per_node = 269;\n    constexpr uint32_t rows_per_block = 1;\n    constexpr uint32_t grid_columns = 8;\n\n    CircularBuffer param(cb_param), exp_avg(cb_exp_avg),\n        exp_avg_sq(cb_exp_avg_sq), denominator(cb_denominator),\n        decay(cb_decay), param_out(cb_param_out),\n        exp_avg_out(cb_exp_avg_out), exp_avg_sq_out(cb_exp_avg_sq_out),\n        decay_bf16(cb_decay_bf16), update_f32(cb_update_f32),\n        param_f32(cb_param_f32), m_f32(cb_m_f32), sum_f32(cb_sum_f32);\n    const uint32_t node =\n        get_absolute_logical_y() * grid_columns + get_absolute_logical_x();\n\n    decay.wait_front(1);\n    DeviceZoneScopedN(\"adamw_exact_parameter\");\n    for (uint32_t local_block = 0; local_block < blocks_per_node;\n         ++local_block) {\n        const uint32_t block = node * blocks_per_node + local_block;\n        if (block >= total_blocks) {\n            continue;\n        }\n        param.wait_front(rows_per_block);\n        exp_avg.wait_front(rows_per_block);\n        exp_avg_sq.wait_front(rows_per_block);\n        denominator.wait_front(rows_per_block);\n        param_out.reserve_back(rows_per_block);\n        exp_avg_out.reserve_back(rows_per_block);\n        exp_avg_sq_out.reserve_back(rows_per_block);\n\n        for (uint32_t tile = 0; tile < rows_per_block; ++tile) {\n            decay_bf16.reserve_back(1);\n            unary_op_init_common(cb_param, cb_decay_bf16);\n            tile_regs_acquire();\n            copy_tile_to_dst_init_short_with_dt(cb_decay, cb_param);\n            copy_tile(cb_param, tile, 0);\n            copy_tile_to_dst_init_short_with_dt(cb_param, cb_decay);\n            copy_tile(cb_decay, 0, 1);\n            mul_binary_tile_init();\n            mul_binary_tile(0, 1, 0);\n            // The multiplication result is a BF16 graph value before the\n            // following explicit FP32 conversion.\n            typecast_tile_init<\n                (uint32_t)DataFormat::Float32,\n                (uint32_t)DataFormat::Float16_b>();\n            typecast_tile<\n                (uint32_t)DataFormat::Float32,\n                (uint32_t)DataFormat::Float16_b>(0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_decay_bf16)));\n            pack_tile<true>(0, cb_decay_bf16, 0);\n            tile_regs_release();\n            decay_bf16.push_back(1);\n\n            // The reference materializes both BF16->F32 conversions, divide,\n            // add and F32->BF16 conversion as separate TTNN programs.  Mirror\n            // every numerical edge with private L1 CBs, but keep the entire\n            // sequence inside one physical program.\n            decay_bf16.wait_front(1);\n            param_f32.reserve_back(1);\n            init_sfpu(cb_decay_bf16, cb_param_f32);\n            tile_regs_acquire();\n            copy_tile(cb_decay_bf16, 0, 0);\n            typecast_tile_init<\n                (uint32_t)DataFormat::Float16_b,\n                (uint32_t)DataFormat::Float32>();\n            typecast_tile<\n                (uint32_t)DataFormat::Float16_b,\n                (uint32_t)DataFormat::Float32>(0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_param_f32)));\n            pack_tile<true>(0, cb_param_f32, 0);\n            tile_regs_release();\n            param_f32.push_back(1);\n            decay_bf16.pop_front(1);\n\n            m_f32.reserve_back(1);\n            init_sfpu(cb_exp_avg, cb_m_f32);\n            tile_regs_acquire();\n            copy_tile(cb_exp_avg, tile, 0);\n            typecast_tile_init<\n                (uint32_t)DataFormat::Float16_b,\n                (uint32_t)DataFormat::Float32>();\n            typecast_tile<\n                (uint32_t)DataFormat::Float16_b,\n                (uint32_t)DataFormat::Float32>(0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_m_f32)));\n            pack_tile<true>(0, cb_m_f32, 0);\n            tile_regs_release();\n            m_f32.push_back(1);\n\n            m_f32.wait_front(1);\n            update_f32.reserve_back(1);\n            unary_op_init_common(cb_m_f32, cb_update_f32);\n            tile_regs_acquire();\n            copy_tile_to_dst_init_short_with_dt(\n                cb_denominator, cb_m_f32);\n            copy_tile(cb_m_f32, 0, 0);\n            copy_tile_to_dst_init_short_with_dt(cb_m_f32, cb_denominator);\n            copy_tile(cb_denominator, tile, 1);\n            div_binary_tile_init();\n            div_binary_tile(0, 1, 0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_update_f32)));\n            pack_tile<true>(0, cb_update_f32, 0);\n            tile_regs_release();\n            update_f32.push_back(1);\n            m_f32.pop_front(1);\n\n            param_f32.wait_front(1);\n            update_f32.wait_front(1);\n            sum_f32.reserve_back(1);\n            unary_op_init_common(cb_param_f32, cb_sum_f32);\n            tile_regs_acquire();\n            copy_tile_to_dst_init_short_with_dt(\n                cb_update_f32, cb_param_f32);\n            copy_tile(cb_param_f32, 0, 0);\n            copy_tile_to_dst_init_short_with_dt(cb_param_f32, cb_update_f32);\n            copy_tile(cb_update_f32, 0, 1);\n            add_binary_tile_init();\n            add_binary_tile(0, 1, 0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_sum_f32)));\n            pack_tile<true>(0, cb_sum_f32, 0);\n            tile_regs_release();\n            sum_f32.push_back(1);\n            update_f32.pop_front(1);\n            param_f32.pop_front(1);\n\n            sum_f32.wait_front(1);\n            init_sfpu(cb_sum_f32, cb_param_out);\n            tile_regs_acquire();\n            copy_tile(cb_sum_f32, 0, 0);\n            typecast_tile_init<\n                (uint32_t)DataFormat::Float32,\n                (uint32_t)DataFormat::Float16_b>();\n            typecast_tile<\n                (uint32_t)DataFormat::Float32,\n                (uint32_t)DataFormat::Float16_b>(0);\n            tile_regs_commit();\n            tile_regs_wait();\n            PACK((pack_reconfig_data_format(cb_param_out)));\n            pack_tile<true>(0, cb_param_out, tile);\n            tile_regs_release();\n            sum_f32.pop_front(1);\n\n            copy_one(cb_exp_avg, tile, cb_exp_avg_out, tile);\n            copy_one(cb_exp_avg_sq, tile, cb_exp_avg_sq_out, tile);\n        }\n        param_out.push_back(rows_per_block);\n        exp_avg_out.push_back(rows_per_block);\n        exp_avg_sq_out.push_back(rows_per_block);\n        denominator.pop_front(rows_per_block);\n        exp_avg_sq.pop_front(rows_per_block);\n        exp_avg.pop_front(rows_per_block);\n        param.pop_front(rows_per_block);\n    }\n    decay.pop_front(1);\n}\n",
+      "tensor_indices": [],
+      "kernel_config": {
+        "type": "ComputeKernelConfig",
+        "math_fidelity": "HiFi4",
+        "fp32_dest_acc_en": true,
+        "dst_full_sync_en": false,
+        "unpack_to_dest_modes": [
+          "Default",
+          "Default",
+          "Default",
+          "Fp32",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Fp32",
+          "Fp32",
+          "Fp32",
+          "Fp32",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default",
+          "Default"
+        ],
+        "bfp8_pack_precise": false,
+        "math_approx_mode": false
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc0(0);\n  int32_t v1 = 4096;\n  int32_t v2 = 2;\n  size_t v3 = 2;\n  int8_t v4 = 0;\n  int32_t v5 = 0;\n  int32_t v6 = 2048;\n  int32_t v7 = 1;\n  size_t v8 = 34368;\n  size_t v9 = 0;\n  size_t v10 = 17184;\n  size_t v11 = 1;\n  size_t v12 = 8;\n  size_t v13 = 269;\n  CircularBuffer cb_ctarg_4(get_compile_time_arg_val(4));\n  CircularBuffer cb_ctarg_3(get_compile_time_arg_val(3));\n  CircularBuffer cb_ctarg_1(get_compile_time_arg_val(1));\n  CircularBuffer cb_ctarg_2(get_compile_time_arg_val(2));\n  CircularBuffer cb_ctarg_0(get_compile_time_arg_val(0));\n  cb_ctarg_4.reserve_back(v7);\n  int32_t v14 = get_common_arg_val<uint32_t>(v9);\n  auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<2, 13>(), 0>();\n  TensorAccessor v15 = TensorAccessor(tensor_accessor_args_0, v14, v6);\n  noc0.async_read(v15, CoreLocalMem<uint32_t>(cb_ctarg_4.get_write_ptr()), v15.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v5)}, {});\n  noc0.async_read_barrier();\n  cb_ctarg_4.push_back(v7);\n  size_t v16 = get_absolute_logical_x();\n  size_t v17 = get_absolute_logical_y();\n  size_t v18 = v17 * v12;\n  size_t v19 = v18 + v16;\n  for (size_t i20 = v9; i20 < v13; i20 += v11) {\n    size_t v21 = v19 * v13;\n    size_t v22 = v21 + i20;\n    ptrdiff_t v23 = (ptrdiff_t) v22;\n    ptrdiff_t v24 = (ptrdiff_t) v10;\n    bool v25 = v23 < v24;\n    if (v25) {\n      cb_ctarg_0.reserve_back(v7);\n      cb_ctarg_1.reserve_back(v7);\n      cb_ctarg_2.reserve_back(v7);\n      cb_ctarg_3.reserve_back(v7);\n      int32_t v26 = get_common_arg_val<uint32_t>(v3);\n      auto tensor_accessor_args_1 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 13>(), 2>();\n      TensorAccessor v27 = TensorAccessor(tensor_accessor_args_1, v26, v6);\n      ptrdiff_t v28 = (ptrdiff_t) v22;\n      int32_t v29 = (int32_t) v28;\n      noc0.async_read(v27, CoreLocalMem<uint32_t>(cb_ctarg_0.get_write_ptr()), v27.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v29)}, {});\n      size_t v30 = v22 + v10;\n      auto tensor_accessor_args_2 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 13>(), 2>();\n      TensorAccessor v31 = TensorAccessor(tensor_accessor_args_2, v26, v6);\n      ptrdiff_t v32 = (ptrdiff_t) v30;\n      int32_t v33 = (int32_t) v32;\n      noc0.async_read(v31, CoreLocalMem<uint32_t>(cb_ctarg_1.get_write_ptr()), v31.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v33)}, {});\n      size_t v34 = v22 + v8;\n      auto tensor_accessor_args_3 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<0, 13>(), 2>();\n      TensorAccessor v35 = TensorAccessor(tensor_accessor_args_3, v26, v6);\n      ptrdiff_t v36 = (ptrdiff_t) v34;\n      int32_t v37 = (int32_t) v36;\n      noc0.async_read(v35, CoreLocalMem<uint32_t>(cb_ctarg_2.get_write_ptr()), v35.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v37)}, {});\n      int32_t v38 = get_common_arg_val<uint32_t>(v11);\n      auto tensor_accessor_args_4 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<1, 13>(), 1>();\n      TensorAccessor v39 = TensorAccessor(tensor_accessor_args_4, v38, v1);\n      noc0.async_read(v39, CoreLocalMem<uint32_t>(cb_ctarg_3.get_write_ptr()), v39.get_aligned_page_size(), {.page_id = static_cast<uint32_t>(v29)}, {});\n      noc0.async_read_barrier();\n      cb_ctarg_3.push_back(v7);\n      cb_ctarg_2.push_back(v7);\n      cb_ctarg_1.push_back(v7);\n      cb_ctarg_0.push_back(v7);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        2,
+        1,
+        0
+      ],
+      "kernel_config": {
+        "type": "ReaderKernelConfig"
+      }
+    },
+    {
+      "thread_type": "noc",
+      "cpp_source": "#include <cstdint>\n#include \"api/compile_time_args.h\"\n#include \"api/core_local_mem.h\"\n#include \"api/dataflow/circular_buffer.h\"\n#include \"api/dataflow/dataflow_api.h\"\n#include \"api/dataflow/endpoints.h\"\n#include \"api/dataflow/noc.h\"\n#include \"api/tensor/noc_traits.h\"\n#include \"tools/profiler/kernel_profiler.hpp\"\nvoid kernel_main() {\n  Noc noc1(1);\n  int8_t v1 = 1;\n  int32_t v2 = 0;\n  int32_t v3 = 2048;\n  int32_t v4 = 1;\n  size_t v5 = 34368;\n  size_t v6 = 0;\n  size_t v7 = 17184;\n  size_t v8 = 1;\n  size_t v9 = 8;\n  size_t v10 = 269;\n  CircularBuffer cb_ctarg_6(get_compile_time_arg_val(6));\n  CircularBuffer cb_ctarg_7(get_compile_time_arg_val(7));\n  CircularBuffer cb_ctarg_5(get_compile_time_arg_val(5));\n  size_t v11 = get_absolute_logical_x();\n  size_t v12 = get_absolute_logical_y();\n  size_t v13 = v12 * v9;\n  size_t v14 = v13 + v11;\n  for (size_t i15 = v6; i15 < v10; i15 += v8) {\n    size_t v16 = v14 * v10;\n    size_t v17 = v16 + i15;\n    ptrdiff_t v18 = (ptrdiff_t) v17;\n    ptrdiff_t v19 = (ptrdiff_t) v7;\n    bool v20 = v18 < v19;\n    if (v20) {\n      cb_ctarg_5.wait_front(v4);\n      cb_ctarg_6.wait_front(v4);\n      cb_ctarg_7.wait_front(v4);\n      int32_t v21 = get_common_arg_val<uint32_t>(v6);\n      auto tensor_accessor_args_0 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<3, 13>(), 0>();\n      TensorAccessor v22 = TensorAccessor(tensor_accessor_args_0, v21, v3);\n      ptrdiff_t v23 = (ptrdiff_t) v17;\n      int32_t v24 = (int32_t) v23;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_5.get_read_ptr()), v22, v22.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v24)});\n      size_t v25 = v17 + v7;\n      auto tensor_accessor_args_1 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<3, 13>(), 0>();\n      TensorAccessor v26 = TensorAccessor(tensor_accessor_args_1, v21, v3);\n      ptrdiff_t v27 = (ptrdiff_t) v25;\n      int32_t v28 = (int32_t) v27;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_6.get_read_ptr()), v26, v26.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v28)});\n      size_t v29 = v17 + v5;\n      auto tensor_accessor_args_2 = TensorAccessorArgs<tensor_accessor::detail::get_tensor_accessor_args_cta_offset<3, 13>(), 0>();\n      TensorAccessor v30 = TensorAccessor(tensor_accessor_args_2, v21, v3);\n      ptrdiff_t v31 = (ptrdiff_t) v29;\n      int32_t v32 = (int32_t) v31;\n      noc1.async_write(CoreLocalMem<uint32_t>(cb_ctarg_7.get_read_ptr()), v30, v30.get_aligned_page_size(), {} , {.page_id = static_cast<uint32_t>(v32)});\n      noc1.async_write_barrier();\n      cb_ctarg_7.pop_front(v4);\n      cb_ctarg_6.pop_front(v4);\n      cb_ctarg_5.pop_front(v4);\n    }\n  }\n  return;\n}\n\n",
+      "tensor_indices": [
+        3
+      ],
+      "kernel_config": {
+        "type": "WriterKernelConfig"
+      }
+    }
+  ],
+  "core_range": {
+    "start": [
+      0,
+      0
+    ],
+    "end": [
+      7,
+      7
+    ]
+  },
+  "cb_configs": [
+    {
+      "buffer_index": 0,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 1,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 2,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 3,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 4,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 2048,
+      "num_tiles": 1,
+      "block_count": 1
+    },
+    {
+      "buffer_index": 5,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 6,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 7,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 8,
+      "data_format": "BFloat16",
+      "page_size": 2048,
+      "total_size": 4096,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 9,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 10,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 11,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    },
+    {
+      "buffer_index": 12,
+      "data_format": "Float32",
+      "page_size": 4096,
+      "total_size": 8192,
+      "num_tiles": 2,
+      "block_count": 2
+    }
+  ],
+  "num_tensors": 4,
+  "num_pipe_sync_semaphores": 0
+}

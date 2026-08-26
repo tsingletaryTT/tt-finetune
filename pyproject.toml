@@ -48,4 +48,7 @@ exclude = ["tt_finetune.tests*", "blacksmith.*.tests*", "blacksmith.tests*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-tt_finetune = ["README.md", "docs/*.md", "_runtime/**/*", "_resources/**/*", "kernels/cpp/*.cpp"]
+tt_finetune = ["README.md", "docs/*.md", "_runtime/**/*", "_resources/**/*", "_resident_bundles/**/*", "kernels/cpp/*.cpp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,38 @@
+{
+  "format_version": 1,
+  "backend": "blackhole_exact_adamw_descriptor_bundle_v1",
+  "architecture": "blackhole",
+  "logical_grid": [
+    8,
+    8
+  ],
+  "rows": 549888,
+  "gradient_prefix_pages": 112,
+  "gradient_pages": 17184,
+  "granularity": 1,
+  "phase_order": [
+    "moments",
+    "denominator",
+    "epsilon",
+    "parameter"
+  ],
+  "phase_sha256": {
+    "moments": "3136839a29db66166bb21a9c964197f3c728334a1587f9ae74c9af4e4e32f5d4",
+    "denominator": "fae15f61f803e744fe9f194e7b2bf77a8b406270dc049b4034a42dcd959990fe",
+    "epsilon": "bbab6f7f43d651986fe434dd54a5efec9e5d86fd99a7e732891eacc59d04ab71",
+    "parameter": "87ec776e702b620878128839975e0232fb0a7793a6a15c34938dfc6a05f3cfbc"
+  },
+  "state_layout": [
+    "parameter",
+    "exp_avg",
+    "exp_avg_sq"
+  ],
+  "moments_private_layout": [
+    "parameter",
+    "exp_avg",
+    "exp_avg_sq",
+    "sqrt_exp_avg_sq"
+  ],
+  "safe_default": false,
+  "execution_performed": false
+}
