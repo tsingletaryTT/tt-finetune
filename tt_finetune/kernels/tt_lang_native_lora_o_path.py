@@ -35,6 +35,7 @@ def build_tt_lang_native_lora_o_path(
     memory_mode: str = "l1",
     frozen_weight_transposed: bool = False,
     rank_k_tiles_per_phase: int = 2,
+    lora_active: bool = True,
 ) -> Callable:
     """Build exact ``base + scale * ((head @ A.T) @ B.T)``."""
 
@@ -105,11 +106,14 @@ def build_tt_lang_native_lora_o_path(
                 transaction = ttl.copy(tile, rank_hidden[0:1, 0:1])
                 transaction.wait()
 
+    if not lora_active and debug_stage not in {"base", "full"}:
+        raise ValueError("inactive LoRA O projection supports base/full stages only")
     variant = (
         f"t{tokens}.h{hidden_features}.r{logical_rank}."
         f"s{float(scale):.9g}.{debug_stage}.{memory_mode}."
         f"wt{int(frozen_weight_transposed)}."
-        f"rk{rank_k_tiles_per_phase}.rt{rank_tiles}.v7"
+        f"rk{rank_k_tiles_per_phase}.rt{rank_tiles}."
+        f"active{int(lora_active)}.v8"
     )
 
     # Public table: head, W, A, B, output, H.  Private L1 table:
@@ -161,7 +165,9 @@ def build_tt_lang_native_lora_o_path(
     base_n_block = math.ceil((hidden_features // 32) / 11)
     base_program = {
         "operation": "ttnn.matmul",
-        "operand_indices": [0, 1, 4 if debug_stage == "base" else 6],
+        "operand_indices": [
+            0, 1, 4 if debug_stage == "base" or not lora_active else 6
+        ],
         "transpose_a": False,
         "transpose_b": not frozen_weight_transposed,
         # Match TTNN's all-DRAM canonical schedule even though the full owner
@@ -204,8 +210,10 @@ def build_tt_lang_native_lora_o_path(
         "operation": "ttnn.add",
         "operand_indices": [6, 9, 4],
     }
-    programs = [rank_program]
-    if debug_stage == "base":
+    programs = [] if not lora_active else [rank_program]
+    if not lora_active:
+        programs.append(base_program)
+    elif debug_stage == "base":
         programs.append(base_program)
     elif debug_stage == "delta":
         programs.append(delta_program)
@@ -263,6 +271,7 @@ def build_tt_lang_native_lora_o_path(
     operation.memory_mode = memory_mode
     operation.frozen_weight_transposed = bool(frozen_weight_transposed)
     operation.rank_k_tiles_per_phase = int(rank_k_tiles_per_phase)
+    operation.lora_active = bool(lora_active)
     operation.program_sequence = programs
     operation._ttl_program = _probe
     return operation

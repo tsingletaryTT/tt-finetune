@@ -408,6 +408,10 @@ def build_tt_lang_resident_attention_forward_owner(
         )
         if canonical_grouped_qkv_rank else None
     )
+    target_aware_o = (
+        os.environ.get("TT_FINETUNE_TARGET_AWARE_O", "0") == "1"
+    )
+    o_lora_active = "o" in active_lora_roles or not target_aware_o
     native_o = build_tt_lang_native_lora_o_path(
         tokens=sequence_length,
         hidden_features=hidden_features,
@@ -418,6 +422,7 @@ def build_tt_lang_resident_attention_forward_owner(
         # 128x576 @ 8x576.T SmolLM2 operation.  Keeping this explicit avoids
         # the L1 destination selecting a different one-tile reduction tree.
         rank_k_tiles_per_phase=canonical_rank_k_tiles_per_phase,
+        lora_active=o_lora_active,
     )
     direct_copy = build_tt_lang_owner_aligned_copy(
         rows=sequence_length,
@@ -1124,8 +1129,11 @@ def build_tt_lang_resident_attention_forward_owner(
                 _remap_all(
                     head_checkpoint_child, {0: head4_id, 1: arena_id}
                 ),
-                _remap_all(
-                    rank_checkpoint_child, {0: o_rank_id, 1: arena_id}
+                *(
+                    [_remap_all(
+                        rank_checkpoint_child, {0: o_rank_id, 1: arena_id}
+                    )]
+                    if o_lora_active else []
                 ),
                 _remap_all(
                     output_checkpoint_child, {0: o_output_id, 1: arena_id}
@@ -1546,14 +1554,14 @@ def build_tt_lang_resident_attention_forward_owner(
             (
                 1 + rank_prefix_programs
                 + 3 + bf16_core.physical_programs + 1
-                + native_o.physical_programs + 5
+                + native_o.physical_programs + 5 - int(not o_lora_active)
             )
             if canonical_bf16_attention else
             (
                 1 + rank_prefix_programs
                 + 2 + native_qk.physical_programs
                 + 1 + exact_tail.physical_programs + 1 - 1
-                + native_o.physical_programs + 5
+                + native_o.physical_programs + 5 - int(not o_lora_active)
             )
         )
         if exact_attention_tail else
