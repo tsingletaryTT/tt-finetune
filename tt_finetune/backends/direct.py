@@ -827,17 +827,20 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             report.get("shape_distribution", {})
             .get("tile_length_histogram", {})
         )
+        sequence_length = (
+            self.args.max_seq_length or self.model.max_seq_length
+        )
         approximate_lengths = [
             int(boundary)
             for boundary, count in histogram.items()
             for _ in range(int(count))
         ]
         if not approximate_lengths:
-            approximate_lengths = [self.args.max_seq_length]
+            approximate_lengths = [sequence_length]
         report["automatic_data_geometry_plan"] = plan_data_geometries(
             approximate_lengths,
             batch_size=self.args.per_device_train_batch_size,
-            sequence_length=self.args.max_seq_length,
+            sequence_length=sequence_length,
             gradient_accumulation_steps=(
                 self.args.gradient_accumulation_steps
             ),

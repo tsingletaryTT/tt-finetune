@@ -76,13 +76,14 @@ def plan_and_install_architecture(
     sequence_length: int,
     requested_attention_backend: str = "auto",
     requested_moe_backend: str = "auto",
+    attention_query_chunk_tokens: int = 128,
 ) -> ArchitectureInstallReport:
     """Discover, plan and install only architecture-qualified integrations."""
 
     if requested_attention_backend not in {"auto", "safe", "native"}:
         raise ValueError("attention backend must be auto, safe or native")
-    if requested_moe_backend not in {"auto", "safe", "sparse"}:
-        raise ValueError("MoE backend must be auto, safe or sparse")
+    if requested_moe_backend not in {"auto", "safe", "sparse", "dynamic"}:
+        raise ValueError("MoE backend must be auto, safe, sparse or dynamic")
     descriptor, weight_map = describe_model(model)
     first_parameter = next(model.parameters(), None)
     observed_dtype = (
@@ -134,7 +135,9 @@ def plan_and_install_architecture(
             and requested_attention_backend != "safe"
         )
         attention_install = install_streamed_attention(
-            model, native_backward_experimental=use_native
+            model,
+            native_backward_experimental=use_native,
+            query_chunk_tokens=attention_query_chunk_tokens,
         )
     if descriptor.moe is not None:
         moe_selection = plan.selection("moe")
@@ -146,6 +149,13 @@ def plan_and_install_architecture(
             if requested_moe_backend == "auto"
             else requested_moe_backend
         )
+        if selected_moe_backend == "dynamic" and (
+            descriptor.moe.expert_capacity_factor is not None
+        ):
+            raise ValueError(
+                "dynamic no-capacity expert scheduling cannot replace an "
+                "explicit capacity/drop routing contract"
+            )
         if (
             selected_moe_backend == "sparse"
             and moe_selection.implementation != "device_sparse_selected_experts"

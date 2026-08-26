@@ -1,4 +1,4 @@
-"""Geometry-aware geometry-aware candidate planning and measured profile selection.
+"""Geometry-aware autotuner candidate planning and measured profile selection.
 
 The accepted architecture planner remains the semantic and memory-safety authority.
 This module builds a bounded set of whole-step execution candidates on top of
@@ -443,9 +443,89 @@ def _candidate_knobs(request: PlannerRequest) -> list[dict[str, Any]]:
         if partition != runtime_base["graph_partition"]:
             vary(graph_partition=partition)
 
-    # This preview exposes only choices with completed full-step silicon
-    # qualification: optimizer packing and graph boundaries.  Wider hardware
-    # geometry exploration remains outside the frozen release.
+    optimized = {
+        **runtime_base,
+        "activation_policy": (
+            "recompute" if sequence > 128 else "save_bounded"
+        ),
+        "frozen_weight_policy": (
+            "persistent_reduced"
+            if request.memory_mode in {
+                "bf8_frozen", "bf4_frozen", "hybrid_frozen"
+            }
+            else "stream_bf16"
+        ),
+        "prefetch_depth": 1,
+        "double_buffered": True,
+    }
+    variants.append(optimized)
+
+    if sequence > 128 and descriptor.qkv_projection_layout == "separate":
+        vary(attention_strategy="safe_streamed")
+        for block in valid_blocks:
+            if block != default_block:
+                vary(
+                    attention_strategy="safe_streamed",
+                    attention_query_block=block,
+                )
+        if plan.selection("attention").implementation == "native_streamed_causal":
+            vary(attention_strategy="native_streamed")
+    # These are real public-worker execution paths.  They are deliberately
+    # macro candidates: the tuner first asks whether grouped native LoRA or a
+    # larger resident MLP/attention ownership boundary is beneficial, then
+    # tunes smaller packing choices only inside a promising region.
+    vary(peft_strategy="native_grouped")
+    vary(peft_strategy="native_resident_mlp")
+    vary(peft_strategy="native_resident_mlp_attention")
+    for group in (2, 4, 8):
+        if group <= descriptor.layer_count:
+            explore(optimized, layer_group_size=group)
+    for prefetch in (0, 2):
+        explore(
+            optimized,
+            prefetch_depth=prefetch,
+            double_buffered=prefetch > 0,
+        )
+    for policy in ("save_bounded", "recompute"):
+        if policy != optimized["activation_policy"]:
+            explore(optimized, activation_policy=policy)
+    if plan.rank > TILE_SIZE:
+        for width in (TILE_SIZE, 2 * TILE_SIZE, 4 * TILE_SIZE):
+            if width != optimized["rank_tile_width"]:
+                explore(optimized, rank_tile_width=width)
+    if descriptor.moe is not None:
+        # These are distinct execution candidates, not model-family routes.
+        # Unsupported/dynamic schedules are retained in the audit and pruned
+        # with an explicit reason until a native implementation is qualified.
+        for schedule in (
+            "assignment_weight_gather",
+            "expert_capacity_bucketed",
+            "dynamic_native_expert_bucketed",
+        ):
+            if schedule != runtime_base["moe_schedule"]:
+                vary(moe_schedule=schedule)
+    if request.data.packing_opportunity >= 0.1:
+        bucket = max(
+            32,
+            min(sequence, _ceil_to(int(request.data.p90_tokens), 32)),
+        )
+        explore(optimized, sequence_bucket=bucket)
+    # Two curated macro candidates explore the interactions that matter most
+    # without forming the Cartesian product of every knob.
+    explore(
+        optimized,
+        layer_group_size=min(4, descriptor.layer_count),
+        prefetch_depth=2,
+        optimizer_pack_bytes=4 * 1024 * 1024,
+        activation_policy="recompute",
+    )
+    explore(
+        optimized,
+        attention_query_block=min(valid_blocks),
+        attention_kv_block=default_block,
+        layer_group_size=min(2, descriptor.layer_count),
+        prefetch_depth=1,
+    )
 
     unique: dict[str, dict[str, Any]] = {}
     for item in variants:
@@ -543,6 +623,24 @@ def _evaluate_candidate(
         if request.estimated_device_bytes is not None
         else plan.estimated_device_bytes
     ) + checkpoint_bytes + prefetch_bytes
+    if (
+        descriptor.moe is not None
+        and knobs["moe_schedule"] == "dynamic_native_expert_bucketed"
+    ):
+        # The current single-card sparse_matmul ABI materializes only the
+        # active layer's block-sparse expert-major activations.  Account for
+        # that real transient instead of pretending the TTML variable-row ABI
+        # is already available through PJRT.
+        dram_peak += (
+            plan.logical_tokens
+            * descriptor.moe.expert_count
+            * (
+                3 * descriptor.moe.expert_intermediate_size
+                + descriptor.hidden_size
+                + 2 * rank_physical
+            )
+            * dtype_bytes
+        )
     noc_bytes = descriptor.layer_count * plan.logical_tokens * dtype_bytes * (
         descriptor.hidden_size * 4 + descriptor.intermediate_size * 2
     )
@@ -690,7 +788,29 @@ def _evaluate_candidate(
             reasons.append(
                 "static expert buckets require an explicit capacity/drop contract"
             )
-    if knobs["moe_schedule"] not in {
+    if knobs["moe_schedule"] == "dynamic_native_expert_bucketed":
+        if descriptor.moe is None:
+            reasons.append("dynamic expert scheduling requires MoE semantics")
+        else:
+            if descriptor.moe.expert_capacity_factor is not None:
+                reasons.append(
+                    "dynamic no-capacity scheduling cannot replace an explicit "
+                    "capacity/drop contract"
+                )
+            if plan.logical_tokens % TILE_SIZE:
+                reasons.append("dynamic experts require a /32 token geometry")
+            if any(
+                value % TILE_SIZE
+                for value in (
+                    descriptor.hidden_size,
+                    descriptor.moe.expert_intermediate_size,
+                )
+            ):
+                reasons.append(
+                    "dynamic expert sparse matmuls require tile-aligned "
+                    "hidden/intermediate dimensions"
+                )
+    elif knobs["moe_schedule"] not in {
         None,
         "assignment_weight_gather",
         "expert_capacity_bucketed",
@@ -742,13 +862,13 @@ def generate_candidates(
         for knobs in _candidate_knobs(request)
     )
     if not any(item.admitted for item in candidates):
-        # The architecture safe plan is still authoritative, but geometry-aware must not
+        # The architecture safe plan is still authoritative, but autotuner must not
         # invent an optimized plan when every generated geometry was pruned.
         details = "; ".join(
             f"{item.candidate_id}: {', '.join(item.rejection_reasons)}"
             for item in candidates
         )
-        raise ValueError(f"no geometry-aware execution candidate admitted: {details}")
+        raise ValueError(f"no execution candidate admitted: {details}")
     return candidates
 
 
@@ -766,6 +886,22 @@ def candidate_worker_arguments(
         "--optimizer-tile-packed",
         "--optimizer-pack-bytes", str(candidate.optimizer_pack_bytes),
         "--optimizer-packing-strategy", candidate.optimizer_packing_strategy,
+        "--attention-query-block", str(candidate.attention_query_block),
+        "--attention-backend", (
+            "safe" if candidate.attention_strategy == "safe_streamed" else
+            "native" if candidate.attention_strategy == "native_streamed" else
+            "auto"
+        ),
+        "--peft-execution-strategy", candidate.peft_strategy,
+        "--moe-execution-strategy", (
+            "dynamic"
+            if candidate.moe_schedule == "dynamic_native_expert_bucketed"
+            else "sparse"
+            if candidate.moe_schedule == "expert_capacity_bucketed"
+            else "safe"
+            if candidate.moe_schedule == "assignment_weight_gather"
+            else "auto"
+        ),
     ]
     if candidate.graph_partition == "monolithic":
         arguments.append("--fuse-step")
@@ -800,10 +936,10 @@ class ExecutionProfileCache:
         except FileNotFoundError:
             return {"schema_version": _CACHE_SCHEMA, "entries": {}}
         except json.JSONDecodeError as error:
-            raise ValueError(f"invalid geometry-aware profile cache: {self.path}") from error
+            raise ValueError(f"invalid execution profile cache: {self.path}") from error
         if value.get("schema_version") != _CACHE_SCHEMA:
             raise ValueError(
-                f"unsupported geometry-aware profile cache schema in {self.path}"
+                f"unsupported execution profile cache schema in {self.path}"
             )
         if not isinstance(value.get("entries"), dict):
             raise ValueError("profile cache entries must be an object")
@@ -896,7 +1032,7 @@ class ExecutionProfileCache:
 
     def store(self, profile: AutotuneProfile) -> None:
         if not profile.measured:
-            raise ValueError("only measured geometry-aware winners may enter the cache")
+            raise ValueError("only measured execution winners may enter the cache")
         document = self._read()
         document["entries"][profile.profile_key] = {
             **profile.to_dict(),
@@ -919,7 +1055,7 @@ class ExecutionProfileCache:
         profile: Mapping[str, Any],
     ) -> None:
         if profile.get("selection_status") != "measured":
-            raise ValueError("only measured geometry-aware winners may enter the cache")
+            raise ValueError("only measured execution winners may enter the cache")
         if semantic_profile_key(profile.get("request_contract", {})) != profile_key:
             raise ValueError("profile key does not match its request contract")
         document = self._read()

@@ -1,45 +1,42 @@
 # Supported configurations
 
-Support is decided from model semantics and tensor geometry. A model name is
-never used to select a kernel or backend. `TTTrainer.supports(...)` and
-`tt-finetune supports MODEL` provide a compilation-free prediction; a
-prediction is not the same as a completed silicon qualification.
+`tt-finetune` accepts decoder-only causal language models whose discovered
+semantics can be mapped to the operations below and whose requested training
+geometry fits one P150a.
 
-## Qualified architecture semantics
+## Qualified dense semantics
 
-- decoder-only causal language models
-- RMSNorm and stable LayerNorm
-- MHA and GQA attention
-- separate Q/K/V, fused QKV, and Conv1D-style projections
-- standard rotary positions and learned absolute positions
-- SwiGLU/gated MLP and ordinary GELU MLP
-- tied and untied language-model heads
-- dense and bounded sparse-MoE execution
+- RMSNorm and LayerNorm
+- MHA, GQA, and MQA
+- separate, fused, and supported partially fused Q/K/V projections
+- standard and scaled RoPE where the architecture descriptor recognizes it
+- ordinary MLP and gated/SwiGLU MLP
+- linear and Conv1D-style projection storage
+- tied or untied embeddings and supported bias variants
+- BF16 LoRA ranks including tile-friendly and irregular tails
+- batch sizes 1–4 and sequence buckets through 4096 in the qualified matrix
 
-Representative silicon-qualified paths include Qwen 2/2.5-style RMSNorm GQA
-models, GPT-2-style fused Conv1D models, Pythia/GPT-NeoX-style stable
-LayerNorm models, and Granite sparse-MoE. The dense generalization matrix
-accepted every checkpoint that physically fit on one P150a; four larger
-checkpoints were excluded only by device-memory capacity.
+Real-checkpoint qualification includes representatives from Qwen2/Qwen2.5,
+Qwen3, Llama-compatible models, Pythia/GPT-NeoX, GPT-Neo, OPT, BLOOM, XGLM,
+CodeGen, StableLM, and GPT-2. Qualification applies to the listed checkpoint
+and geometry evidence, not automatically to every model published under those
+family names.
 
-## Qualified geometries and methods
+## Sparse MoE
 
-- LoRA ranks including 4, 8, and 16 in public full-model qualification; the
-  lower-level geometry engine also covers larger and non-tile-aligned ranks
-- batch 1 public silicon qualification and broader planner validation
-- sequence lengths 32 and 128 for full training, plus a sequence-256
-  long-attention smoke
-- LoRA, rsLoRA, LoRA+, DoRA, and IA3 on their valid semantic targets
-- BF16 and qualified mixed BF8/BF4 frozen-weight configurations
+The qualified sparse path covers decoder-only expert layers with top-k routing,
+SwiGLU experts, assignment weights, supported auxiliary loss, selected-expert
+execution, and documented shared-expert variants. Mixtral, Qwen2-MoE, and
+Qwen3-MoE semantic fixtures have silicon evidence. Unknown routing,
+capacity/drop semantics, or expert layouts fail closed rather than silently
+using dense semantics.
 
-Configurations outside this evidence may still work through the general
-planner or safe fallback, but should be treated as expected rather than
-qualified until a device run succeeds.
+## Memory admission
 
-Query an intended job before compiling:
+The planner prefers BF16 when it fits. Qualified larger-model paths may use
+native BF8 or mixed BF8/BF4 frozen-weight storage while adapters, gradients,
+and optimizer state retain the training contract. Reduced frozen-weight runs
+are deterministic and finite but are not claimed bit-exact to BF16.
 
-```bash
-tt-finetune supports Qwen/Qwen2.5-0.5B \
-  --rank 8 --batch-size 1 --sequence-length 128
-```
-
+Use `TTTrainer.supports(...)` or `tt-finetune supports ...` for an explicit
+decision, estimated peak memory, selected path, and actionable rejection.

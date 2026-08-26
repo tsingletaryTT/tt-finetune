@@ -21,6 +21,25 @@ from tt_finetune.architecture import (
     CanonicalExpertLinearRole,
     CanonicalModelMap,
 )
+from tt_finetune.kernels.dynamic_sparse_expert import (
+    dynamic_expert_input_linear,
+    dynamic_shared_input_expert_linear,
+    dynamic_sparse_support_error,
+    expert_block_sparsity,
+)
+
+
+def _differentiable_silu(value: torch.Tensor) -> torch.Tensor:
+    """Expose the complete SiLU derivative to the TT-XLA autograd graph.
+
+    The opaque ``aten.silu`` backward in the installed TT-XLA stack can omit
+    the gate-side LoRA gradient for batched sparse-owner graphs.  The canonical
+    identity is lowered to ordinary multiply/sigmoid operations and retains
+    the gate edge for every B/S geometry.  Both safe and sparse owners use the
+    same expression, so their comparison contract remains matched.
+    """
+
+    return value * torch.sigmoid(value)
 
 
 @dataclass(frozen=True)
@@ -112,8 +131,8 @@ class DeviceSparseMoELoRA(nn.Module):
         backend: str,
     ) -> None:
         super().__init__()
-        if backend not in {"safe", "sparse"}:
-            raise ValueError("MoE backend must be safe or sparse")
+        if backend not in {"safe", "sparse", "dynamic"}:
+            raise ValueError("MoE backend must be safe, sparse or dynamic")
         if input_weight.ndim != 3 or output_weight.ndim != 3:
             raise ValueError("expert weights must have [experts, out, in] layout")
         expert_count, fused_width, hidden_size = input_weight.shape
@@ -187,7 +206,7 @@ class DeviceSparseMoELoRA(nn.Module):
         low_in = _expert_linear(inputs, a_in)
         gate_up = gate_up + _expert_linear(low_in, b_in) * self.scaling
         gate, up = gate_up.chunk(2, dim=-1)
-        hidden = F.silu(gate) * up
+        hidden = _differentiable_silu(gate) * up
         output = _expert_linear(hidden, base_out)
         low_out = _expert_linear(hidden, a_out)
         return output + _expert_linear(low_out, b_out) * self.scaling
@@ -250,8 +269,8 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         output_contract: str = "hidden_router_tuple",
     ) -> None:
         super().__init__()
-        if backend not in {"safe", "sparse"}:
-            raise ValueError("MoE backend must be safe or sparse")
+        if backend not in {"safe", "sparse", "dynamic"}:
+            raise ValueError("MoE backend must be safe, sparse or dynamic")
         if output_contract not in {"hidden", "hidden_router_tuple"}:
             raise ValueError("unsupported MoE module output contract")
         allowed_normalization = {
@@ -427,11 +446,11 @@ class GenericDeviceSparseMoELoRA(nn.Module):
             gate, up = self._project_selected(
                 "gate_up", inputs, indices
             ).chunk(2, dim=-1)
-            hidden = F.silu(gate) * up
+            hidden = _differentiable_silu(gate) * up
         elif "gate" in self.routed_weights:
             gate = self._project_selected("gate", inputs, indices)
             up = self._project_selected("up", inputs, indices)
-            hidden = F.silu(gate) * up
+            hidden = _differentiable_silu(gate) * up
         else:
             hidden = F.gelu(
                 self._project_selected("up", inputs, indices)
@@ -483,11 +502,11 @@ class GenericDeviceSparseMoELoRA(nn.Module):
             gate, up = self._project_bucketed(
                 "gate_up", expert_inputs
             ).chunk(2, dim=-1)
-            hidden = F.silu(gate) * up
+            hidden = _differentiable_silu(gate) * up
         elif "gate" in self.routed_weights:
             gate = self._project_bucketed("gate", expert_inputs)
             up = self._project_bucketed("up", expert_inputs)
-            hidden = F.silu(gate) * up
+            hidden = _differentiable_silu(gate) * up
         else:
             hidden = F.gelu(self._project_bucketed("up", expert_inputs))
         expert_outputs = self._project_bucketed("down", hidden)
@@ -501,6 +520,119 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         ]
         restored = restored * valid.to(restored.dtype).unsqueeze(-1)
         return restored.reshape(*indices.shape, expert_outputs.shape[-1])
+
+    def _project_dynamic(
+        self,
+        role: str,
+        inputs: torch.Tensor,
+        block_sparsity: torch.Tensor,
+        indices: torch.Tensor,
+        *,
+        shared_input: bool,
+    ) -> torch.Tensor:
+        """Run one selected-only projection with a sparse frozen base.
+
+        The TT sparse-matmul kernel is valuable for the large frozen expert
+        projection, where it avoids replicating an expert matrix for every
+        routed assignment.  It is deliberately *not* used for the rank-width
+        LoRA A/B products: Blackhole's current sparse kernel does not admit
+        those very narrow output geometries reliably (notably N=32), while the
+        ordinary selected-adapter path is both bounded and exact.  Adapter
+        selection therefore remains differentiable and assignment-local, and
+        only its small result is scattered back into the expert-major output.
+        """
+
+        project = (
+            dynamic_shared_input_expert_linear
+            if shared_input else dynamic_expert_input_linear
+        )
+        base = project(
+            inputs, self.routed_weights[role], block_sparsity, indices
+        )
+
+        tokens, top_k = indices.shape
+        if shared_input:
+            selected_inputs = inputs
+        else:
+            token_ids = torch.arange(
+                tokens, dtype=indices.dtype, device=indices.device
+            ).unsqueeze(1)
+            selected_inputs = inputs[token_ids, indices]
+        low = _expert_linear(
+            selected_inputs, self._select(self.routed_lora_A[role], indices)
+        )
+        selected_delta = _expert_linear(
+            low, self._select(self.routed_lora_B[role], indices)
+        ) * self.scaling
+
+        expert_ids = torch.arange(
+            self.expert_count, dtype=indices.dtype, device=indices.device
+        )
+        selected_to_expert = (
+            indices.unsqueeze(-1)
+            == expert_ids.reshape(1, 1, self.expert_count)
+        ).to(selected_delta.dtype)
+        expert_delta = (
+            selected_delta.unsqueeze(2)
+            * selected_to_expert.unsqueeze(-1)
+        ).sum(dim=1)
+        return base + expert_delta
+
+    def _routed_experts_dynamic(
+        self,
+        inputs: torch.Tensor,
+        indices: torch.Tensor,
+    ) -> torch.Tensor:
+        """No-capacity block-sparse expert execution on the TT device.
+
+        Routing chooses active 32-token/expert blocks at runtime.  Frozen
+        expert matrices stay expert-major and are never gathered per routed
+        assignment.  Trainable LoRA matrices use the exact selected-adapter
+        path because their narrow rank geometry is not a safe sparse-kernel
+        shape; only small adapter tensors/activations participate there.
+        """
+
+        exact, block_sparsity = expert_block_sparsity(
+            indices,
+            expert_count=self.expert_count,
+            dtype=inputs.dtype,
+        )
+        selected_inputs = inputs.unsqueeze(1).expand(
+            -1, indices.shape[1], -1
+        )
+        if "gate_up" in self.routed_weights:
+            gate, up = self._project_dynamic(
+                "gate_up", selected_inputs, block_sparsity, indices,
+                shared_input=True,
+            ).chunk(2, dim=-1)
+            hidden = _differentiable_silu(gate) * up
+        elif "gate" in self.routed_weights:
+            gate = self._project_dynamic(
+                "gate", selected_inputs, block_sparsity, indices,
+                shared_input=True,
+            )
+            up = self._project_dynamic(
+                "up", selected_inputs, block_sparsity, indices,
+                shared_input=True,
+            )
+            hidden = _differentiable_silu(gate) * up
+        else:
+            hidden = F.gelu(
+                self._project_dynamic(
+                    "up", selected_inputs, block_sparsity, indices,
+                    shared_input=True,
+                )
+            )
+        # sparse_matmul skips inactive blocks, while this exact token mask
+        # removes the unused lanes in active blocks before the down projection.
+        hidden = hidden * exact.to(hidden.dtype).unsqueeze(-1)
+        output = self._project_dynamic(
+            "down", hidden, block_sparsity, indices, shared_input=False
+        )
+        token_ids = torch.arange(
+            inputs.shape[0], dtype=indices.dtype, device=indices.device
+        ).unsqueeze(1)
+        return output[token_ids, indices]
 
     def _group_limited_logits(self, logits: torch.Tensor) -> torch.Tensor:
         if self.expert_group_count is None:
@@ -643,9 +775,11 @@ class GenericDeviceSparseMoELoRA(nn.Module):
 
         if "gate_up" in self.shared_weights:
             gate, up = project("gate_up", inputs).chunk(2, dim=-1)
-            hidden = F.silu(gate) * up
+            hidden = _differentiable_silu(gate) * up
         elif "gate" in self.shared_weights:
-            hidden = F.silu(project("gate", inputs)) * project("up", inputs)
+            hidden = _differentiable_silu(
+                project("gate", inputs)
+            ) * project("up", inputs)
         else:
             hidden = F.gelu(project("up", inputs))
         outputs = project("down", hidden)
@@ -685,12 +819,25 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         self.last_route_indices = selected_indices.detach()
         self.last_router_logits = router_logits
         selected_inputs = flat.unsqueeze(1).expand(-1, self.top_k, -1)
+        use_dynamic = self.backend == "dynamic" and self.capacity_factor is None
         use_bucketed = (
             self.backend == "sparse"
             and self.capacity_factor is not None
             and self.overflow_policy in {"drop", "residual"}
         )
-        if use_bucketed:
+        if use_dynamic:
+            support_error = dynamic_sparse_support_error(
+                tokens=int(flat.shape[0]),
+                experts=self.expert_count,
+                input_features=self.hidden_size,
+                output_features=self.intermediate_size,
+            )
+            if support_error is not None:
+                raise RuntimeError(support_error)
+            routed = self._routed_experts_dynamic(flat, selected_indices)
+            self.last_execution_schedule = "dynamic_native_expert_bucketed"
+            self.last_packed_slot_count = int(selected_indices.numel())
+        elif use_bucketed:
             expert_capacity = self._expert_capacity(
                 int(selected_indices.numel())
             )
@@ -977,6 +1124,8 @@ def install_sparse_moe(
         router = model.get_submodule(moe_map.router_path)
         moe_semantics = architecture.moe if architecture is not None else None
         legacy = bool(
+            backend != "dynamic"
+            and
             moe_map.expert_storage_layout == "fused"
             and tuple(item.role for item in moe_map.projections)
                 == ("expert_gate_up", "expert_down")
@@ -1066,6 +1215,11 @@ def install_sparse_moe(
                     router_layer=router,
                 ),
             )
+        # A newly constructed ``nn.Module`` starts in training mode even when
+        # it replaces a block in an already-evaluating model.  Preserve the
+        # original block state so router jitter/dropout and reference semantics
+        # do not silently change during installation.
+        replacement.train(original.training)
         parent_path, child_name = moe_map.path.rsplit(".", 1)
         setattr(model.get_submodule(parent_path), child_name, replacement)
     if any(

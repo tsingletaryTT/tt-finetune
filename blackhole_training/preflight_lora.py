@@ -265,7 +265,7 @@ def main():
     if config.initial_adapter_path:
         if config.initial_adapter_name != "default":
             raise NotImplementedError(
-                "checkpoint-resume continued training supports adapter_name='default'"
+                "Continued training supports adapter_name='default'"
             )
         loaded = PeftConfig.from_pretrained(config.initial_adapter_path)
         loaded_type = str(

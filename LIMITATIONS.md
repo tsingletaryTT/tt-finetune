@@ -1,25 +1,21 @@
 # Known limitations
 
-- One Blackhole P150a only. Multi-device and multi-host training are not
-  implemented.
-- Parameter-efficient training only. Full-weight fine-tuning and QLoRA are
+- One Blackhole P150a only; multi-device and distributed training are not
+  included.
+- Parameter-efficient training only. Full-parameter fine-tuning and QLoRA are
+  not part of the current contract.
+- PJRT complete-executable deserialization across fresh processes is not
+  available. Lower-level compiler caches and measured plans are reusable, and
+  a persistent same-process service can retain an executable safely.
+- Reduced frozen-weight training has its own deterministic numerical contract;
+  it is not BF16 bit identity.
+- Sparse-MoE support is limited to admitted routing, expert, capacity, and
+  auxiliary-loss semantics. Unsupported variants fail with a capability error.
+- Prefix/prompt tuning and data-dependent simultaneous adapter routing are not
+  implemented because they alter attention state or graph ABI.
+- Encoder-only, encoder-decoder, multimodal, and Mamba/state-space models are
   not supported.
-- Cross-process PJRT executable deserialization is unavailable in the bundled
-  runtime. Measured semantic plans persist across processes, while compiled
-  executables can be reused only inside the same persistent Python service.
-- A new model/geometry may therefore require compilation on first use.
-- Dynamic no-capacity sparse-expert scheduling is not included. The release
-  uses the qualified bounded sparse schedule and safe sparse fallback.
-- Sparse expert tensors require a lossless TT extension alongside normal PEFT
-  files; ordinary PEFT alone cannot represent all expert-specific state.
-- Prompt tuning, prefix tuning, full fine-tuning, Mamba/state-space models,
-  multimodal models, and arbitrary remote custom modeling code are not
-  qualified.
-- Long-context qualification is narrower than short-sequence qualification.
-- Low-memory BF8/BF4 modes reduce frozen-weight representation only. They do
-  not claim BF16 bit equality; the qualified contract is deterministic,
-  finite training with exact repeatability inside the selected precision
-  contract.
-- Static support queries cannot prove that a model fits after every compiler
-  allocation. Genuine device-memory exhaustion remains possible.
-
+- Checkpoints that exceed single-card DRAM after supported reductions are
+  rejected as capacity limitations.
+- Compilation can be substantial for a new semantic geometry. It is excluded
+  from steady-state performance claims and is reported separately.

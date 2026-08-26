@@ -68,12 +68,17 @@ def main() -> None:
         if args.json:
             print(json.dumps(payload, indent=2))
         else:
-            print("tt-finetune runtime:", "ready" if environment.ready else "not ready")
+            print("tt-finetune runtime:", "ready" if payload["ready"] else "not ready")
             print("mode:", environment.runtime_mode or "none")
             print("python:", environment.runtime_python or "none")
+            if args.smoke:
+                smoke = payload.get("device_smoke", {})
+                print("device smoke:", smoke.get("status", "not run"))
+                if smoke.get("error"):
+                    print("-", smoke["error"])
             for problem in environment.problems:
                 print("-", problem)
-        raise SystemExit(0 if environment.ready else 1)
+        raise SystemExit(0 if payload["ready"] else 1)
 
     if args.command == "supports":
         from .trainer import TTTrainer

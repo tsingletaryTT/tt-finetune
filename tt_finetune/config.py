@@ -247,6 +247,10 @@ class TrainingArguments:
     auto_tune_warmup_steps: int = 4
     auto_tune_measurement_steps: int = 20
     auto_tune_max_candidates: int = 4
+    # Qualification-only: use the broader macro-first portfolio as an oracle
+    # for planner-quality measurement. Ordinary users should leave this false;
+    # it never changes candidate semantics, only the bounded search budget.
+    auto_tune_qualification_oracle: bool = False
 
     def __post_init__(self) -> None:
         for name in (

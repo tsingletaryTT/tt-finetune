@@ -429,7 +429,7 @@ def query_support(
                 # architecture intentionally retained its older conservative
                 # 24-GiB planning default. low-memory measured the actual P150a
                 # allocatable capacity and admits guarded 7B reduced-weight
-                # plans against it; geometry-aware must consume that same physical
+                # plans against it; autotuner must consume that same physical
                 # capacity or it silently drops every valid 7B candidate.
                 hardware=HardwareCapabilities(
                     dram_bytes=P150A_ALLOCATABLE_DRAM_BYTES,
@@ -447,7 +447,7 @@ def query_support(
             ))
         except ValueError:
             # The accepted safe planner remains authoritative if no optimized
-            # geometry-aware candidate survives analytical pruning.
+            # autotuner candidate survives analytical pruning.
             execution_profile = None
         attention = plan.selection("attention").implementation
         suggestion = None

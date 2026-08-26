@@ -30,7 +30,7 @@ def _matches(
 
 def descriptor_cache_path(root: str | Path, plan: GeometryPlan) -> Path:
     root = Path(root)
-    return root / "generated" / "descriptors" / (
+    return root / "generated" / "descriptor_cache" / (
         f"{plan.model.model_family}.pr{plan.physical_rank}."
         f"b{plan.batch_size}.s{plan.sequence_length}."
         f"off{plan.optimizer_gradient_prefix_pages}"
@@ -67,15 +67,8 @@ def resolve_descriptor_bundle(
     )
     candidates.extend(
         path.parent for path in generated.glob(
-            "descriptors/*/manifest.json"
+            "descriptor_cache/*/manifest.json"
         )
-    )
-    bundled = (
-        Path(__file__).resolve().parents[1]
-        / "_resources" / "qualified" / "generated"
-    )
-    candidates.extend(
-        path.parent for path in bundled.glob("adamw_descriptors_*/manifest.json")
     )
     for candidate in candidates:
         if _matches(candidate, **expected):

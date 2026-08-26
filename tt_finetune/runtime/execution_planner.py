@@ -1,6 +1,6 @@
 """Architecture-driven Blackhole planning for dense decoder-only causal LMs.
 
-architecture deliberately leaves the frozen native geometry planner unchanged.  This
+architecture deliberately leaves the frozen native planner unchanged.  This
 planner consumes a canonical semantic descriptor, derives all size-dependent
 geometry, and selects only implementations whose structural capability and
 qualification constraints match.
@@ -212,13 +212,13 @@ class ResidentQualification:
 _RESIDENT_QUALIFICATIONS = (
     ResidentQualification(
         "738434b016f9144dce8cc44c", 8, 1, 128,
-        "smol_geometry_exact",
+        "smol_geometry_20_step_exact",
         "generated/smollm2_resident_layer_backward_sequence_v8",
         "generated/adamw_descriptors_smollm2_30layer_exact_v1",
     ),
     ResidentQualification(
         "491a95b4f0dc7ec66c77a07a", 16, 1, 128,
-        "qwen_geometry_exact",
+        "qwen_geometry_20_step_exact",
         "generated/qwen_resident_layer_backward_sequence_v12",
         "generated/adamw_descriptors_qwen_24layer_exact_v1",
     ),
@@ -226,7 +226,7 @@ _RESIDENT_QUALIFICATIONS = (
 
 
 # Native long-attention is admitted by tensor geometry. These two head layouts
-# are the native geometry silicon-qualified contracts; new layouts remain safe until a
+# are the native silicon-qualified contracts; new layouts remain safe until a
 # matching evolving qualification is added.
 _NATIVE_ATTENTION_GEOMETRIES = frozenset({
     (64, 9, 3),

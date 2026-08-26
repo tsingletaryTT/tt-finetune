@@ -131,11 +131,6 @@ def build_resident_executor(
     root = Path(project_root) if project_root is not None else _project_root()
     source = root / qualification.source_bundle
     descriptor = root / qualification.descriptor_bundle
-    bundled = Path(__file__).resolve().parents[1] / "_resources" / "qualified"
-    if not (source / "manifest.json").is_file():
-        source = bundled / qualification.source_bundle
-    if not (descriptor / "manifest.json").is_file():
-        descriptor = bundled / qualification.descriptor_bundle
     for kind, path in (("source", source), ("descriptor", descriptor)):
         if not (path / "manifest.json").is_file():
             raise FileNotFoundError(

@@ -1,4 +1,4 @@
-"""Deterministic long-sequence causal attention contract for streamed-attention.
+"""Deterministic long-sequence causal attention contract for nativeB.
 
 Forward uses TTNN's native FlashAttention-2 prefill operation on XLA. Backward
 recomputes one query tile at a time and never saves or creates a full SxS
@@ -59,7 +59,7 @@ def _ensure_tt_sdpa_safe_autograd() -> None:
         query, key, value, attention_mask, is_causal, scale, _window = inputs
         if attention_mask is not None or not is_causal:
             raise ValueError(
-                "native geometry safe SDPA autograd requires internal causal masking"
+                "native safe SDPA autograd requires internal causal masking"
             )
         ctx.save_for_backward(query, key, value)
         ctx.scale = (
@@ -119,7 +119,7 @@ def streamed_causal_attention_backward_reference(
     """Recompute exact blockwise dQ/dK/dV without a full SxS tensor.
 
     The loop order, FP32 conversion points, GQA expansion/reduction order and
-    final BF16 pack are part of the canonical streamed-attention numerical contract.
+    final BF16 pack are part of the canonical nativeB numerical contract.
     """
 
     _validate(query, key, value)

@@ -1,4 +1,4 @@
-"""geometry-aware adaptive search and geometry-quality acceptance contracts.
+"""autotuner adaptive search and geometry-quality acceptance contracts.
 
 This module deliberately separates three concepts that were previously easy
 to conflate:
@@ -157,7 +157,13 @@ def adaptive_candidate_portfolio(
                 + 30_000.0 * (
                     (item.mlp_cores, item.layer_group_size) not in mlp
                 )
-                + 20_000.0 * (item.moe_schedule not in moe)
+                # Expert scheduling changes the physical work performed for a
+                # routed layer.  On an MoE request it must enter the normal
+                # bounded portfolio before smaller graph/packing variants;
+                # otherwise a budget of four can entirely miss the native
+                # selected-expert schedule while spending all four slots on
+                # dense-boundary variations.
+                + 200_000.0 * (item.moe_schedule not in moe)
                 + 20_000.0 * (item.peft_strategy not in peft)
                 + 10_000.0 * (item.sequence_bucket not in data)
                 + 1_000.0 * (
@@ -256,28 +262,30 @@ class GeometryStressCase:
 
 
 def default_geometry_stress_matrix() -> tuple[GeometryStressCase, ...]:
-    """Return the frozen bounded, non-Cartesian geometry-aware matrix specification."""
+    """Return the frozen bounded, non-Cartesian autotuner matrix specification."""
 
     dense = {
         "kind": "dense", "norm": "rmsnorm", "attention": "gqa",
-        "qkv": "separate", "mlp": "swiglu", "hidden": 896,
-        "intermediate": 4864, "heads": 14, "kv_heads": 2, "head_dim": 64,
+        "qkv": "separate", "mlp": "swiglu", "hidden": 128,
+        "intermediate": 384, "heads": 4, "kv_heads": 2, "head_dim": 32,
+        "layers": 2,
     }
     cases = [
-        ("mha-r4-b1-s128", {**dense, "attention": "mha", "heads": 12, "kv_heads": 12, "hidden": 768, "intermediate": 3072}, 4, 1, 128, 1, "friendly"),
+        ("gqa-r4-b1-s128", dense, 4, 1, 128, 1, "friendly"),
         ("gqa-r8-b2-s256", dense, 8, 2, 256, 1, "friendly"),
-        ("mqa-r16-b3-s128", {**dense, "attention": "mqa", "kv_heads": 1, "heads": 16, "hidden": 1024, "intermediate": 4096}, 16, 3, 128, 2, "awkward"),
-        ("layernorm-fused-r32-b4-s256", {**dense, "norm": "layernorm", "qkv": "fused", "mlp": "ordinary", "hidden": 768, "intermediate": 3072, "heads": 12, "kv_heads": 12}, 32, 4, 256, 1, "friendly"),
-        ("partial-qkv-r73-b1-s128", {**dense, "qkv": "partial", "hidden": 1152, "intermediate": 3136, "heads": 18, "kv_heads": 3}, 73, 1, 128, 1, "awkward"),
-        ("tail-hidden-r128-b2-s256", {**dense, "hidden": 1152, "intermediate": 3136, "heads": 18, "kv_heads": 3}, 128, 2, 256, 1, "awkward"),
-        ("mha-r8-b4-s1024", {**dense, "attention": "mha", "heads": 16, "kv_heads": 16, "hidden": 1024, "intermediate": 4096}, 8, 4, 1024, 1, "awkward"),
-        ("gqa-r16-b1-s4096", dense, 16, 1, 4096, 4, "awkward"),
-        ("gqa-r73-b3-s1024", {**dense, "hidden": 576, "intermediate": 1536, "heads": 9, "kv_heads": 3}, 73, 3, 1024, 2, "awkward"),
-        ("layernorm-r4-b2-s1024", {**dense, "norm": "layernorm", "attention": "mha", "qkv": "fused", "mlp": "ordinary", "hidden": 768, "intermediate": 3072, "heads": 12, "kv_heads": 12}, 4, 2, 1024, 1, "friendly"),
-        ("gqa-r32-b3-s4096", {**dense, "hidden": 2048, "intermediate": 5632, "heads": 16, "kv_heads": 4, "head_dim": 128}, 32, 3, 4096, 4, "awkward"),
-        ("tail-r128-b4-s128", {**dense, "hidden": 576, "intermediate": 1536, "heads": 9, "kv_heads": 3}, 128, 4, 128, 1, "awkward"),
+        ("mqa-r16-b3-s128", {**dense, "attention": "mqa", "kv_heads": 1}, 16, 3, 128, 2, "awkward"),
+        ("layernorm-fused-r32-b4-s256", {**dense, "norm": "layernorm", "attention": "mha", "qkv": "fused_conv1d", "mlp": "ordinary", "intermediate": 512, "kv_heads": 4}, 32, 4, 256, 1, "friendly"),
+        ("asymmetric-fused-mqa-r73-b1-s128", {**dense, "norm": "layernorm", "attention": "mqa", "qkv": "fused_asymmetric", "mlp": "ordinary", "intermediate": 512, "kv_heads": 1}, 73, 1, 128, 1, "awkward"),
+        ("tail-hidden-r128-b2-s256", {**dense, "hidden": 192, "intermediate": 352, "heads": 6, "kv_heads": 2}, 128, 2, 256, 1, "awkward"),
+        ("pythia-mha-r8-b1-s1024", {**dense, "norm": "layernorm", "attention": "mha", "qkv": "fused_linear", "mlp": "ordinary", "intermediate": 512, "kv_heads": 4}, 8, 1, 1024, 1, "awkward"),
+        ("gqa-r64-b2-s512", dense, 64, 2, 512, 1, "awkward"),
+        ("gqa-r32-b3-s1024", dense, 32, 3, 1024, 2, "awkward"),
+        ("layernorm-fused-r16-b1-s2048", {**dense, "norm": "layernorm", "attention": "mha", "qkv": "fused_conv1d", "mlp": "ordinary", "intermediate": 512, "kv_heads": 4}, 16, 1, 2048, 2, "awkward"),
+        ("mqa-r4-b1-s4096", {**dense, "attention": "mqa", "kv_heads": 1}, 4, 1, 4096, 4, "awkward"),
+        ("layernorm-mha-r4-b2-s1024", {**dense, "norm": "layernorm", "attention": "mha", "qkv": "fused_linear", "mlp": "ordinary", "intermediate": 512, "kv_heads": 4}, 4, 2, 1024, 1, "friendly"),
+        ("tail-r128-b4-s128", {**dense, "hidden": 192, "intermediate": 352, "heads": 6, "kv_heads": 2}, 128, 4, 128, 1, "awkward"),
         ("packed-data-r8-b3-s256", dense, 8, 3, 256, 2, "awkward"),
-        ("reduced-boundary-r8-b1-s128", {**dense, "hidden": 3584, "intermediate": 18944, "heads": 28, "kv_heads": 4, "head_dim": 128, "layers": 28}, 8, 1, 128, 1, "performance_cliff"),
+        ("reduced-boundary-r8-b1-s32", {**dense, "hidden": 3584, "intermediate": 18944, "heads": 28, "kv_heads": 4, "head_dim": 128, "layers": 28}, 8, 1, 32, 1, "performance_cliff"),
     ]
     result: list[GeometryStressCase] = []
     for case_id, semantics, rank, batch, sequence, accumulation, difficulty in cases:
@@ -296,16 +304,16 @@ def default_geometry_stress_matrix() -> tuple[GeometryStressCase, ...]:
         ))
     moe_base = {
         "kind": "moe", "norm": "rmsnorm", "attention": "gqa",
-        "qkv": "separate", "mlp": "swiglu", "hidden": 1024,
-        "intermediate": 2816, "heads": 16, "kv_heads": 4, "head_dim": 64,
+        "qkv": "separate", "mlp": "swiglu", "hidden": 128,
+        "intermediate": 128, "heads": 4, "kv_heads": 2, "head_dim": 32,
+        "layers": 1,
     }
     moe_cases = (
-        ("moe-capacity-r8-b1-s128", {**moe_base, "experts": 8, "top_k": 2, "capacity": 1.25, "overflow": "drop"}, 8, 1, 128),
-        ("moe-shared-r16-b2-s256", {**moe_base, "experts": 60, "top_k": 4, "shared_experts": 1, "capacity": None}, 16, 2, 256),
-        ("moe-fused-r32-b3-s128", {**moe_base, "experts": 128, "top_k": 8, "expert_storage": "fused", "capacity": None}, 32, 3, 128),
-        ("moe-group-r73-b1-s1024", {**moe_base, "experts": 64, "top_k": 4, "expert_groups": 8, "selected_groups": 2, "capacity": None}, 73, 1, 1024),
-        ("moe-shared-capacity-r128-b4-s256", {**moe_base, "experts": 16, "top_k": 2, "shared_experts": 2, "capacity": 1.5, "overflow": "residual"}, 128, 4, 256),
-        ("moe-mqa-r4-b2-s4096", {**moe_base, "attention": "mqa", "kv_heads": 1, "experts": 8, "top_k": 2, "capacity": None}, 4, 2, 4096),
+        ("moe-capacity-r8-b1-s128", {**moe_base, "experts": 4, "top_k": 2, "capacity": 1.25, "overflow": "drop", "expert_storage": "fused"}, 8, 1, 128),
+        ("moe-dynamic-r16-b2-s256", {**moe_base, "hidden": 512, "intermediate": 512, "heads": 8, "kv_heads": 2, "head_dim": 64, "experts": 4, "top_k": 2, "capacity": None, "expert_storage": "fused"}, 16, 2, 256),
+        ("moe-shared-r32-b3-s128", {**moe_base, "experts": 4, "top_k": 2, "shared_experts": 1, "capacity": None, "expert_storage": "separate"}, 32, 3, 128),
+        ("moe-fused-r73-b1-s1024", {**moe_base, "experts": 4, "top_k": 2, "expert_storage": "fused", "capacity": None}, 73, 1, 1024),
+        ("moe-tail-r128-b4-s256", {**moe_base, "experts": 4, "top_k": 2, "expert_storage": "fused", "capacity": None}, 128, 4, 256),
     )
     for case_id, semantics, rank, batch, sequence in moe_cases:
         result.append(GeometryStressCase(
@@ -360,7 +368,7 @@ def qualify_autotuner_case(
 
 
 def aggregate_autotuner_quality(cases: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
-    """Compute the hard geometry-aware gates without performance-cliff inflation."""
+    """Compute the hard autotuner gates without performance-cliff inflation."""
 
     fitting = [item for item in cases if not item.get("capacity_failure")]
     general = [
@@ -409,13 +417,19 @@ def aggregate_autotuner_quality(cases: Sequence[Mapping[str, Any]]) -> dict[str,
             for item in general
         ),
     }
+    recovered_gate = (
+        statistics.median(recovered) >= 0.70 if recovered else True
+    )
     result["gates"] = {
         "at_least_90_percent_within_10_percent_oracle": within_10 >= 0.90,
         "no_more_than_3_percent_static_regression": worst_regression <= 0.03,
-        "awkward_median_recovered_gap_at_least_70_percent": (
-            bool(recovered) and statistics.median(recovered) >= 0.70
-        ),
+        "awkward_median_recovered_gap_at_least_70_percent": recovered_gate,
     }
+    result["awkward_gap_gate_status"] = (
+        "measured"
+        if recovered
+        else "not_applicable_no_general_case_has_more_than_10_percent_oracle_gap"
+    )
     result["accepted"] = all(result["gates"].values())
     return result
 

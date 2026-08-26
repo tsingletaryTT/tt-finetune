@@ -1,4 +1,4 @@
-"""Transformers attention-interface bridge for streamed-attention streamed training."""
+"""Transformers attention-interface bridge for nativeB streamed training."""
 
 from __future__ import annotations
 
@@ -73,13 +73,13 @@ def _streamed_attention_forward(
     **kwargs,
 ) -> tuple[torch.Tensor, None]:
     if float(dropout) != 0.0:
-        raise ValueError("streamed-attention streamed attention requires zero dropout")
+        raise ValueError("nativeB streamed attention requires zero dropout")
     if attention_mask is not None:
         raise ValueError(
-            "streamed-attention causal masking is internal; dense masks are forbidden"
+            "nativeB causal masking is internal; dense masks are forbidden"
         )
     if is_causal is False or not getattr(module, "is_causal", True):
-        raise ValueError("streamed-attention streamed attention requires causal attention")
+        raise ValueError("nativeB streamed attention requires causal attention")
     if kwargs.get("output_attentions", False):
         raise ValueError("streamed attention does not publish attention weights")
     output = streamed_causal_attention(
@@ -168,7 +168,7 @@ def install_attention_for_plan(
     *,
     qualification_override: str | None = None,
 ) -> StreamedAttentionInstallReport | None:
-    """Install the attention schedule selected by the native geometry planner.
+    """Install the attention schedule selected by the native planner.
 
     Normal callers provide no override.  Qualification tools may explicitly
     request the safe or native numerical contract so both sides can be
@@ -182,7 +182,7 @@ def install_attention_for_plan(
         return None
     selected = qualification_override or plan.attention_backward_backend
     if selected not in ("safe_streamed_exact", "native_streamed_exact"):
-        raise ValueError(f"unsupported native geometry attention backend: {selected}")
+        raise ValueError(f"unsupported native attention backend: {selected}")
     if (
         selected == "native_streamed_exact"
         and plan.attention_backward_backend != "native_streamed_exact"

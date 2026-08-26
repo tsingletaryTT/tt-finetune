@@ -188,7 +188,7 @@ class CausalLMDeviceEdges:
         projection, FP32 cross entropy, and dHidden production.  Only block
         loss scalars and the final hidden gradient survive the block boundary.
         The accumulation order and final mean division define the scalable
-        native geometry numerical contract.
+        native numerical contract.
         """
 
         if final_hidden.shape[-1] != self.hidden_features:

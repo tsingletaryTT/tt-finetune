@@ -5,7 +5,7 @@ Use CPython 3.12 on a Linux x86-64 host with an accessible Blackhole P150a.
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.1.0rc1/tt_finetune-0.1.0rc1-cp312-cp312-linux_x86_64.whl
+python -m pip install ./dist/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
 tt-finetune doctor --smoke
 python examples/quickstart.py
 ```

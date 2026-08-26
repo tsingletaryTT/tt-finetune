@@ -1,32 +1,36 @@
 # Installation
 
-## Supported preview host
-
-- Linux x86-64 with glibc 2.34 or newer
-- CPython 3.12
-- one Tenstorrent Blackhole P150a
-- compatible Tenstorrent kernel driver and firmware
-- read/write access to `/dev/tenstorrent/*`
-- configured hugepages mounted at `/dev/hugepages-1G` or `/dev/hugepages`
-
-Create a clean environment and install the wheel:
+`tt-finetune` targets a single Tenstorrent Blackhole P150a on 64-bit Linux.
+Install the supplied wheel into a clean Python virtual environment:
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.1.0rc1/tt_finetune-0.1.0rc1-cp312-cp312-linux_x86_64.whl
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install ./tt_finetune-0.2.0-py3-none-any.whl
 tt-finetune doctor
 ```
 
-The wheel bundles the matching PJRT plugin, TT-XLA components, TTNN Python
-bindings, TT-Metal user-space runtime and kernel resources, TT-MLIR compiler
-runtime, and tt-finetune custom sources. Ordinary Python dependencies are
-installed from the configured Python package index.
+The final wheel filename may include a more specific platform tag. Use the
+filename present in the release `dist/` directory.
 
-No `PYTHONPATH`, environment activation script, development checkout, or
-container is required. The package uses resources relative to its installed
-location.
+The host must provide the Tenstorrent kernel driver, access to
+`/dev/tenstorrent`, compatible firmware, and the configured hugepage mount.
+The wheel carries the matching TT-XLA/PJRT, TTNN, TT-Metal user-space, compiler,
+and kernel resources. Run `tt-finetune doctor --json` to see the exact bundled
+paths and every missing system prerequisite.
 
-Use `tt-finetune doctor --smoke` to compile and execute a small operation on
-the actual device. This is a stronger check than library loading alone.
+The optional Hugging Face data and adapter tools are pinned in the release
+compatibility lock. The project is not claimed to be published on PyPI.
 
+## Verify the installation
+
+From a directory outside the source checkout:
+
+```bash
+python -c 'import tt_finetune; print(tt_finetune.__version__)'
+tt-finetune doctor
+python quickstart.py
+```
+
+No `PYTHONPATH`, source checkout, or repository-relative working directory is
+required by the Python product layer.

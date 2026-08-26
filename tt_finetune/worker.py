@@ -356,6 +356,41 @@ def _arguments() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--attention-query-block",
+        type=int,
+        default=None,
+        help=(
+            "Internal streamed-attention query chunk. This is "
+            "normally selected by the geometry autotuner."
+        ),
+    )
+    parser.add_argument(
+        "--attention-backend",
+        choices=("auto", "safe", "native"),
+        default=None,
+        help="Internal long-sequence attention schedule.",
+    )
+    parser.add_argument(
+        "--peft-execution-strategy",
+        choices=(
+            "framework_safe",
+            "native_grouped",
+            "native_resident_mlp",
+            "native_resident_mlp_attention",
+        ),
+        default="framework_safe",
+        help=(
+            "Internal PEFT ownership boundary selected by the "
+            "geometry autotuner."
+        ),
+    )
+    parser.add_argument(
+        "--moe-execution-strategy",
+        choices=("auto", "safe", "sparse", "dynamic"),
+        default="auto",
+        help="Internal routed-expert schedule.",
+    )
+    parser.add_argument(
         "--capture-profile-ir",
         action="store_true",
         help=(
@@ -623,6 +658,10 @@ def run(
     auto_split_after_forward: bool = False,
     split_after_loss: bool = False,
     packed_gradient_clip: bool = False,
+    attention_query_block: int | None = None,
+    attention_backend: str | None = None,
+    peft_execution_strategy: str = "framework_safe",
+    moe_execution_strategy: str = "auto",
     loss_read_interval: int = 1,
     xla_cache: Path | None = None,
     audit_training_state: bool = False,
@@ -635,6 +674,35 @@ def run(
         raise ValueError("profile_warmup_steps must be non-negative")
     if loss_read_interval <= 0:
         raise ValueError("loss_read_interval must be positive")
+    if attention_query_block is not None and (
+        attention_query_block <= 0 or attention_query_block % 32
+    ):
+        raise ValueError("attention_query_block must be a positive tile multiple")
+    if attention_query_block is not None:
+        config.tt_attention_query_chunk_tokens = int(attention_query_block)
+    if attention_backend is not None:
+        if attention_backend not in {"auto", "safe", "native"}:
+            raise ValueError("unsupported attention_backend")
+        config.tt_attention_backend = attention_backend
+    if peft_execution_strategy not in {
+        "framework_safe",
+        "native_grouped",
+        "native_resident_mlp",
+        "native_resident_mlp_attention",
+    }:
+        raise ValueError("unsupported peft_execution_strategy")
+    if peft_execution_strategy != "framework_safe":
+        config.lora_backend = "native_experimental"
+        config.lora_resident_full_mlp_backward = peft_execution_strategy in {
+            "native_resident_mlp",
+            "native_resident_mlp_attention",
+        }
+        config.lora_resident_output_attention_backward = (
+            peft_execution_strategy == "native_resident_mlp_attention"
+        )
+    if moe_execution_strategy not in {"auto", "safe", "sparse", "dynamic"}:
+        raise ValueError("unsupported moe_execution_strategy")
+    config.tt_moe_backend = moe_execution_strategy
     if backward_loss_scale is None:
         backward_loss_scale = (
             128.0
@@ -754,6 +822,14 @@ def run(
         "optimizer_packing_strategy": optimizer_packing_strategy,
         "split_clip_optimizer": split_clip_optimizer,
         "packed_gradient_clip": packed_gradient_clip,
+        "attention_query_block": int(getattr(
+            config, "tt_attention_query_chunk_tokens", 128
+        )),
+        "attention_backend": str(getattr(
+            config, "tt_attention_backend", "auto"
+        )),
+        "peft_execution_strategy": peft_execution_strategy,
+        "moe_execution_strategy": moe_execution_strategy,
         "split_optimizer_phases": split_optimizer_phases,
         "split_after_forward_requested": split_after_forward,
         "auto_split_after_forward": auto_split_after_forward,
@@ -804,7 +880,7 @@ def run(
             sparse_adapter_report.to_dict()
             if sparse_adapter_report is not None else None
         )
-        metrics["architecture_execution"] = (
+        metrics["architecture"] = (
             architecture_report.to_dict()
             if architecture_report is not None else None
         )
@@ -1544,6 +1620,11 @@ def run(
                 moe_execution_paths[moe_path] = (
                     moe_execution_paths.get(moe_path, 0) + 1
                 )
+        moe_numerical_contract = (
+            "deterministic_native_sparse_bf16_hifi4_fp32_v1"
+            if moe_execution_paths.get("dynamic_native_expert_bucketed", 0) > 0
+            else "safe_bf16_reference"
+        )
         metrics.update(
             {
                 "status": (
@@ -1592,6 +1673,7 @@ def run(
                 "gradient_audit": operations.gradient_audit,
                 "peft_execution_paths": peft_execution_paths,
                 "moe_execution_paths": moe_execution_paths,
+                "moe_numerical_contract": moe_numerical_contract,
                 "ttnn_forward_graph": {
                     "requested": capture_ttnn_forward_graph,
                     "captured": operations.ttnn_forward_graph_captured,
@@ -1688,6 +1770,10 @@ def main() -> None:
         auto_split_after_forward=arguments.auto_split_after_forward,
         split_after_loss=arguments.split_after_loss,
         packed_gradient_clip=arguments.packed_gradient_clip,
+        attention_query_block=arguments.attention_query_block,
+        attention_backend=arguments.attention_backend,
+        peft_execution_strategy=arguments.peft_execution_strategy,
+        moe_execution_strategy=arguments.moe_execution_strategy,
         loss_read_interval=arguments.loss_read_interval,
         xla_cache=arguments.xla_cache,
         audit_training_state=arguments.audit_training_state,

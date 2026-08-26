@@ -1,4 +1,4 @@
-"""Parametric native geometry geometry and backend planning.
+"""Parametric native geometry and backend planning.
 
 Qualification points are evidence, not implementation branches. This module
 derives rank, batch and sequence tiling from geometry and resource limits. The
@@ -73,7 +73,7 @@ class GeometryHardwareLimits:
 
     def validate(self) -> None:
         if self.architecture != "blackhole":
-            raise ValueError("native geometry currently targets Blackhole")
+            raise ValueError("native currently targets Blackhole")
         if self.worker_cores <= 0 or self.l1_bytes_per_core <= 0:
             raise ValueError("hardware core/L1 limits must be positive")
         if not 0.0 < self.l1_usable_fraction < 1.0:
@@ -211,7 +211,7 @@ def plan_geometry(
     if sequence_length <= 0:
         raise ValueError("sequence length must be positive")
     if dtype != "bfloat16":
-        raise ValueError("the exact native geometry contract currently requires bfloat16")
+        raise ValueError("the exact native contract currently requires bfloat16")
 
     rank_tiles = math.ceil(rank / TILE_SIZE)
     physical_rank = rank_tiles * TILE_SIZE

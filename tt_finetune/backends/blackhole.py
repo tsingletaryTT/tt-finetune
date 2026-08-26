@@ -155,7 +155,7 @@ class BlackholeXlaBackend(TrainingBackend):
     ) -> Any:
         if stop_after is not None:
             raise NotImplementedError(
-                "stop_after is supported by the direct public trainer backend"
+                "stop_after is supported by the direct public backend"
             )
         if isinstance(resume, str):
             raise NotImplementedError(

@@ -191,7 +191,7 @@ def plan_data_geometries(
 
     Projections are intentionally labelled analytical.  A selected production
     winner still requires synchronized whole-step measurement by the common
-    geometry-aware autotuner.
+    autotuner autotuner.
     """
 
     if not lengths:

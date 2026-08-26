@@ -1,43 +1,38 @@
 # Features
 
-## Public training workflow
+## Adapter training
 
-- `FastTTModel.from_pretrained()` for Hub IDs and local checkpoints
-- `TTTrainer` with automatic architecture, target, memory, and execution plans
-- local JSON, JSONL, text, Python row lists, and Hugging Face datasets
-- deterministic tokenization, shuffling, sequence buckets, and safe causal
-  packing
-- bounded parallel tokenization, DataLoader prefetch, and useful-token
-  throughput reporting
-- checkpoints with optimizer, progress, and data-pipeline state
-- deterministic continuation under the supported execution contract
-
-## Adapter methods
-
-- LoRA
-- rsLoRA
-- LoRA+
+- LoRA and rsLoRA
+- LoRA+ optimizer groups
 - DoRA
-- IA3 for semantically valid separate projections
-- semantic target policies and explicit PEFT-compatible target names
-- layer selection and named adapter lifecycle
-- standard PEFT save, inspect, reload, continue-training, and dense merge
+- IA3
+- automatic canonical target discovery or explicit target selection
+- named adapter load, selection, training, save, inspection, and supported merge
+- standard PEFT adapter export and reload
 
-## Blackhole execution
+## Training
 
-- BF16 training
-- BF8 and BF4 storage for frozen weights in qualified low-memory paths
-- native resident Transformer schedules for qualified geometries
-- packed exact optimizer and clipping paths
-- architecture- and geometry-derived planning without model-name kernel routing
-- measured plan selection and semantic plan cache
-- compile buckets and safe same-process executable reuse
-- serialized device profiling on a single P150a
+- Hugging Face model IDs and local checkpoints
+- automatic architecture discovery and Blackhole memory admission
+- BF16 and qualified reduced frozen-weight memory modes
+- deterministic checkpoint/resume, including optimizer and data position
+- gradient accumulation, clipping, AdamW, logging, and checkpoint cadence
+- dense causal LMs and the documented sparse-MoE contract
 
-## Sparse models
+## Data pipeline
 
-- qualified bounded sparse-expert execution
-- routed and shared expert adapter state
-- lossless TT extension data beside the standard PEFT component when sparse
-  expert tensors cannot be represented by ordinary PEFT alone
+- in-memory examples, Hugging Face datasets, JSON, JSONL, NDJSON, and text
+- tokenizer loading, truncation, attention masks, and position behavior
+- deterministic shuffling and exact data-position resume
+- safe causal-text packing, sequence buckets, bounded parallel tokenization,
+  and DataLoader prefetch
+- useful-token throughput and padding-efficiency reporting
 
+## Compilation and planning
+
+- static capability and memory query before compilation
+- bounded measured full-step execution-plan search
+- semantic measured-plan cache
+- compile buckets and same-process executable reuse
+- explicit compilation versus training timing
+- safe static fallback whenever tuning finds no valid improvement

@@ -1,29 +1,16 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-build/
-dist/
+.pytest_cache/
 .venv/
 venv/
-.pytest_cache/
-.cache/
+build/
+dist/
+*.whl
 *.log
 *.pth
 *.pt
 *.bin
-
-# Bundled Tenstorrent runtime is distributed inside the release wheel
+.cache/
 tt_finetune/_runtime/
-
-# Internal development/qualification tests
 tt_finetune/tests/
-
-# Build artifacts
-dist/
-build/
-*.egg-info/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.venv/
-*.log

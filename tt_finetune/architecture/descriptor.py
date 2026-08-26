@@ -60,7 +60,7 @@ class MoEDescriptor:
     expert_lora_roles: tuple[str, ...]
     moe_layer_indices: tuple[int, ...]
     dense_layer_indices: tuple[int, ...]
-    # geometry-aware extensions.  Defaults intentionally describe the already
+    # autotuner extensions.  Defaults intentionally describe the already
     # accepted Granite-style contract and are omitted from semantic_dict so
     # frozen architecture/6.5 fingerprints remain stable.
     expert_storage_layout: str = "fused"
@@ -299,7 +299,7 @@ class CanonicalArchitectureDescriptor:
         else:
             moe = payload["moe"]
             # Do not perturb historical sparse fingerprints for the original
-            # implicit defaults.  Non-default geometry-aware MoE semantics remain
+            # implicit defaults.  Non-default autotuner MoE semantics remain
             # part of the stable semantic identity.
             defaults = {
                 "expert_storage_layout": "fused",
@@ -318,7 +318,7 @@ class CanonicalArchitectureDescriptor:
             for name, default in defaults.items():
                 if moe.get(name) == default:
                     moe.pop(name, None)
-        # dense architecture adds semantics that are absent from the already-qualified
+        # architecture.7 adds semantics that are absent from the already-qualified
         # architecture models.  Omit their identity/default forms so those frozen
         # semantic fingerprints remain byte-for-byte stable.
         if not payload.get("local_attention_layers"):

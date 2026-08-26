@@ -1,4 +1,4 @@
-"""Host-only dataset inspection used by the public geometry-aware planner."""
+"""Host-only dataset inspection used by the public autotuner planner."""
 
 from __future__ import annotations
 

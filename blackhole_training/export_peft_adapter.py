@@ -47,8 +47,9 @@ def main():
     parser.add_argument(
         "--metadata-base-model",
         help=(
-            "Portable model ID/path written to adapter_config.json instead "
-            "of an internal resolved path."
+            "Portable model ID/path written to adapter_config.json. This "
+            "prevents a container-only /workspace path leaking into a "
+            "standard PEFT export."
         ),
     )
     parser.add_argument("--model-revision")

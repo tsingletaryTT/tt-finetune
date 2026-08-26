@@ -1,55 +1,50 @@
 # Troubleshooting
 
-## Device not found
-
-Run `tt-finetune doctor`. If `/dev/tenstorrent` is missing, install or load the
-compatible Tenstorrent kernel driver and verify firmware compatibility.
-
-## Permission denied
-
-The current user needs read/write access to the Tenstorrent character device.
-Fix the host udev/group policy, log in again, and rerun the doctor command.
-
-## Hugepages missing
-
-Configure and mount the hugepages required by the Tenstorrent runtime. The
-doctor accepts `/dev/hugepages-1G` or `/dev/hugepages`.
-
-## Unsupported Python or host
-
-This wheel requires CPython 3.12, Linux x86-64, and glibc 2.34 or newer. Create
-a new CPython 3.12 virtual environment rather than forcing installation into a
-different interpreter.
-
-## Compilation failure
-
-First run `tt-finetune doctor --smoke`. Then check that the model is supported:
+Start with:
 
 ```bash
-tt-finetune supports MODEL_ID --rank 8 --batch-size 1 --sequence-length 128
+tt-finetune doctor --json
 ```
 
-Use `verbose=True` only when collecting diagnostics. Ordinary operation keeps
-the internal compiler log quiet.
+## Device not found
+
+Confirm the Tenstorrent driver is loaded, `/dev/tenstorrent` is visible to the
+current user, firmware is compatible, and required hugepages are mounted.
+
+## Runtime not found
+
+Reinstall the complete platform wheel and verify that its `_runtime` resources
+were not removed by an archive or antivirus tool. `TT_FINETUNE_WORKSPACE` is an
+advanced development override for a separately qualified runtime bundle; it is
+not required for the normal wheel. Do not set `PYTHONPATH` to a development
+checkout.
 
 ## Out of memory
 
-Reduce sequence length, batch size, LoRA rank, or targets. For a qualified
-large dense model, try `memory_mode="bf8_frozen"` or
-`memory_mode="bf4_frozen"`. These modes change the frozen-weight numerical
-contract and are not QLoRA.
+Keep `memory_mode="auto"`, then reduce sequence length, batch size, rank, or
+model size. `TTTrainer.supports(...)` reports the estimated peak and a smaller
+admitted geometry where one is known.
 
-## A compile repeats in a new process
+## Unsupported architecture or target
 
-This is expected when the executable is not alive in the persistent runtime.
-The bundled PJRT does not safely deserialize executables in a fresh process.
-Use `runtime_mode="persistent"` for repeated compatible jobs in one service;
-measured execution plans remain reusable through the semantic cache.
+Inspect the capability error and canonical target list. Model names never
+force a backend. Unknown attention, position, MLP, expert, or adapter semantics
+fail closed.
 
-## Cache invalidation
+## Compilation failure
 
-Plans are keyed by architecture semantics, tensor geometry, adapter topology,
-precision/memory mode, optimizer, data geometry, and runtime fingerprint.
-Changing any of these creates a new cache identity. Inspect entries with
-`tt-finetune cache`.
+Check runtime/compiler compatibility and available host memory, invalidate a
+stale cache when the reported source contract changed, and rerun with
+`verbose=True`. Compilation time is expected on the first new geometry.
 
+## A fresh process compiles again
+
+This is expected when the lower-level cache cannot satisfy the request. Current
+PJRT cannot deserialize a complete executable across processes. Use persistent
+runtime mode for safe same-process reuse.
+
+## Resume rejected
+
+The checkpoint data or model contract differs from the current run. Restore the
+same tokenizer, source fingerprint, packing/bucketing settings, rank, targets,
+optimizer configuration, and model revision, or start a new run.

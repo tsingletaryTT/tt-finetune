@@ -2,15 +2,13 @@
 
 Planned work includes:
 
-- broader automatic geometry optimization across attention, MLP, memory, and
-  data-pipeline choices
-- dynamic sparse-expert scheduling without fixed capacity padding
-- broader architecture, rank, batch, and long-context qualification
-- faster compilation and stronger portable compilation caches as PJRT support
-  permits
-- additional parameter-efficient training methods
-- multi-device and distributed training
-- selected state-space and multimodal architectures
+- broader automatic geometry and full-step execution optimization;
+- wider dynamic sparse-expert scheduling and MoE semantic coverage;
+- more architecture and long-context qualification;
+- faster, more portable compilation and executable caching;
+- additional parameter-efficient training methods;
+- multi-device training;
+- selected multimodal and state-space architectures after their semantics and
+  memory contracts are defined.
 
-Roadmap items are not part of this preview's support contract.
-
+Roadmap items are not current support claims.

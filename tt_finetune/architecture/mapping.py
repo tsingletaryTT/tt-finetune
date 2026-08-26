@@ -26,11 +26,15 @@ MOE_NAMES = (
     "feed_forward_moe",
 )
 ROLE_ALIASES = {
-    "q": ("q_proj", "query", "q"),
+    "q": ("q_proj", "q_attn", "query", "q"),
     "k": ("k_proj", "key", "k"),
     "v": ("v_proj", "value", "v"),
     "qkv": ("query_key_value", "qkv_proj", "wqkv", "Wqkv", "c_attn", "qkv"),
-    "kv": ("kv_proj", "key_value", "key_value_proj", "wkv"),
+    # GPTBigCode exposes a separate ``q_attn`` plus a Conv1D ``c_attn``
+    # containing only K/V.  ``c_attn`` remains a valid fully fused QKV alias
+    # for GPT-2 when no separate query projection is present; topology, not a
+    # checkpoint name, disambiguates the two cases in ``_map_layer``.
+    "kv": ("kv_proj", "key_value", "key_value_proj", "wkv", "c_attn"),
     "qk": ("qk_proj", "query_key", "query_key_proj", "wqk"),
     "o": ("o_proj", "out_proj", "dense", "c_proj"),
     "gate": ("gate_proj", "w1", "gate"),
