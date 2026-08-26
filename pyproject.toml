@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tt-finetune"
-version = "0.2.0"
+version = "0.2.1rc1"
 description = "LoRA and PEFT training on Tenstorrent Blackhole"
 readme = "tt_finetune/README.md"
 requires-python = ">=3.12,<3.13"
@@ -48,4 +48,4 @@ exclude = ["tt_finetune.tests*", "blacksmith.*.tests*", "blacksmith.tests*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-tt_finetune = ["README.md", "_runtime/**/*", "_resources/**/*", "kernels/cpp/*.cpp"]
+tt_finetune = ["README.md", "docs/*.md", "_runtime/**/*", "_resources/**/*", "kernels/cpp/*.cpp"]

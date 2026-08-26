@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import statistics
+import time
 import traceback
 
 import yaml
@@ -47,7 +48,12 @@ def _tensor_digest(torch, named_tensors) -> dict:
     elements = 0
     for name, value in sorted(named_tensors, key=lambda item: item[0]):
         host = value.detach().cpu().contiguous()
-        digest.update(name.encode("utf-8"))
+        # torch.compile wraps parameters under ``_orig_mod``.  That wrapper
+        # is an execution detail, not part of persisted training state; using
+        # the canonical name makes CPU/reference and TT audits directly
+        # comparable when tensor values are identical.
+        canonical_name = str(name).removeprefix("_orig_mod.")
+        digest.update(canonical_name.encode("utf-8"))
         digest.update(str(host.dtype).encode("ascii"))
         digest.update(str(tuple(host.shape)).encode("ascii"))
         digest.update(
@@ -111,6 +117,21 @@ def _timing_summary(
             statistics.fmean(measured) if measured else None
         ),
     }
+
+
+def _steady_measurement_indices(
+    record_count: int,
+    *,
+    warmup_count: int,
+    first_use_indices: set[int],
+) -> list[int]:
+    """Exclude both declared warmups and every late compile-bucket use."""
+
+    return [
+        index
+        for index in range(record_count)
+        if index >= warmup_count and index not in first_use_indices
+    ]
 
 
 def _lora_plus_parameter_groups(named_trainable, *, base_lr, ratio):
@@ -666,7 +687,10 @@ def run(
     xla_cache: Path | None = None,
     audit_training_state: bool = False,
     service_context: dict | None = None,
+    compile_sequence_buckets: tuple[int, ...] | list[int] | None = None,
+    compile_bucket_repeats: int = 4,
 ) -> dict:
+    startup_started = time.perf_counter()
     optimizer_tile_packed_requested = optimizer_tile_packed
     if stop_after is not None and stop_after <= 0:
         raise ValueError("stop_after must be positive")
@@ -674,6 +698,8 @@ def run(
         raise ValueError("profile_warmup_steps must be non-negative")
     if loss_read_interval <= 0:
         raise ValueError("loss_read_interval must be positive")
+    if compile_bucket_repeats <= 0:
+        raise ValueError("compile_bucket_repeats must be positive")
     if attention_query_block is not None and (
         attention_query_block <= 0 or attention_query_block % 32
     ):
@@ -839,16 +865,55 @@ def run(
         ),
         "persistent_runtime": service_context,
         "audit_training_state": audit_training_state,
+        "startup_profile": {
+            "contract": "public_startup_stages_v1",
+            "current_stage": "runtime_initialization",
+            "events": [],
+        },
     }
-    metrics_path.write_text(
-        json.dumps(metrics, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    stage_started = startup_started
+
+    def publish_metrics() -> None:
+        temporary = metrics_path.with_suffix(".json.tmp")
+        temporary.write_text(
+            json.dumps(metrics, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        temporary.replace(metrics_path)
+
+    def record_stage(stage: str, status: str) -> None:
+        nonlocal stage_started
+        now = time.perf_counter()
+        event = {
+            "stage": stage,
+            "status": status,
+            "elapsed_seconds": now - startup_started,
+        }
+        if status == "completed":
+            event["stage_seconds"] = now - stage_started
+        else:
+            stage_started = now
+        profile = metrics["startup_profile"]
+        profile["current_stage"] = (
+            stage if status == "started" else f"{stage}_completed"
+        )
+        profile["events"].append(event)
+        publish_metrics()
+        logger.info(
+            f"tt-finetune stage {stage}: {status} "
+            f"({event['elapsed_seconds']:.1f}s elapsed)"
+        )
+
+    publish_metrics()
+    record_stage("runtime_initialization", "completed")
 
     try:
+        record_stage("model_loading", "started")
         logger.info("Loading model through tt-finetune direct worker")
         model = get_model(config, device_manager.device, compile_model=True)
         model.train()
+        record_stage("model_loading", "completed")
+        record_stage("optimizer_setup", "started")
         uncompiled_model = getattr(model, "_orig_mod", model)
         native_lora_report = getattr(
             uncompiled_model,
@@ -976,10 +1041,7 @@ def run(
                 ),
             }
         )
-        metrics_path.write_text(
-            json.dumps(metrics, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        publish_metrics()
         model_parameters = sum(
             parameter.numel() for parameter in model.parameters()
         )
@@ -1142,6 +1204,8 @@ def run(
                 "resumed_batch_in_epoch": resumed_batch_in_epoch,
             }
 
+        record_stage("optimizer_setup", "completed")
+        record_stage("dataset_preparation", "started")
         dataset = get_dataset(
             config=config,
             split="train",
@@ -1168,12 +1232,28 @@ def run(
             )
         if data_pipeline_report is not None:
             metrics["data_pipeline"] = data_pipeline_report
-        dataloader = dataset.get_dataloader()
-        dataloader_factory = (
-            dataset.get_dataloader_for_epoch
-            if hasattr(dataset, "get_dataloader_for_epoch")
-            else lambda _epoch: dataloader
-        )
+        if compile_sequence_buckets is not None:
+            if not hasattr(dataset, "get_compile_warmup_dataloader"):
+                raise ValueError(
+                    "the selected dataset does not support deterministic "
+                    "sequence-bucket compile warmup"
+                )
+            dataloader = dataset.get_compile_warmup_dataloader(
+                compile_sequence_buckets,
+                repeats=compile_bucket_repeats,
+                epoch=resumed_epoch,
+            )
+            metrics["compile_warmup_schedule"] = dict(
+                dataset.compile_warmup_schedule
+            )
+            dataloader_factory = lambda _epoch: dataloader
+        else:
+            dataloader = dataset.get_dataloader()
+            dataloader_factory = (
+                dataset.get_dataloader_for_epoch
+                if hasattr(dataset, "get_dataloader_for_epoch")
+                else lambda _epoch: dataloader
+            )
         optimizer_steps_per_epoch = math.ceil(
             len(dataloader) / config.gradient_accumulation_steps
         )
@@ -1182,6 +1262,8 @@ def run(
             if config.max_steps is not None
             else optimizer_steps_per_epoch * config.num_epochs
         )
+        record_stage("dataset_preparation", "completed")
+        record_stage("training_schedule_setup", "started")
         use_preloaded_learning_rates = (
             config.use_tt
             and optimizer_tile_packed
@@ -1296,6 +1378,15 @@ def run(
         running_step_seconds = []
         running_step_learning_rates = []
         checkpoint_events = []
+        compile_stage_completed = False
+        expected_compile_buckets = set(
+            int(value)
+            for value in (
+                (data_pipeline_report or {}).get("bucketing", {})
+                .get("boundaries", [config.max_length])
+            )
+        )
+        observed_compile_buckets: set[int] = set()
 
         def trainer_checkpoint_state(_state, *, batch_in_epoch=None):
             value = {
@@ -1318,6 +1409,16 @@ def run(
             return value
 
         def on_step(record, _state):
+            nonlocal compile_stage_completed
+            observed_compile_buckets.update(record.sequence_lengths)
+            if not compile_stage_completed:
+                # The startup compile boundary is the first complete training
+                # step. Rare later sequence shapes are independent first-use
+                # bucket events, not evidence that all intervening training
+                # was still "compiling".
+                record_stage("device_compile_and_first_step", "completed")
+                record_stage("steady_training", "started")
+                compile_stage_completed = True
             rendered_loss = (
                 f"{record.loss:.4f}"
                 if record.loss is not None
@@ -1449,10 +1550,7 @@ def run(
                         },
                     }
                 )
-                metrics_path.write_text(
-                    json.dumps(metrics, indent=2) + "\n",
-                    encoding="utf-8",
-                )
+                publish_metrics()
 
         loop = TrainingLoop(
             LoopConfig(
@@ -1472,6 +1570,8 @@ def run(
             operations,
             on_step=on_step,
         )
+        record_stage("training_schedule_setup", "completed")
+        record_stage("device_compile_and_first_step", "started")
         state, records = loop.run(
             dataloader_factory,
             state=LoopState(
@@ -1481,6 +1581,13 @@ def run(
                 batch_in_epoch=resumed_batch_in_epoch,
             ),
         )
+        if not compile_stage_completed:
+            record_stage("device_compile_and_first_step", "completed")
+            record_stage("steady_training", "started")
+            compile_stage_completed = True
+        if compile_stage_completed:
+            record_stage("steady_training", "completed")
+        record_stage("checkpoint_and_export", "started")
         if eval_dataloader is not None and config.run_final_validation:
             metrics["final_validation_loss"] = _validate(
                 model,
@@ -1601,16 +1708,57 @@ def run(
             step_e2e_seconds,
             warmup_count=profile_warmup_steps,
         )
+        first_use_indices = []
+        seen_sequence_lengths: set[int] = set()
+        for index, record in enumerate(records):
+            new_lengths = set(record.sequence_lengths) - seen_sequence_lengths
+            if new_lengths:
+                first_use_indices.append((index, tuple(sorted(new_lengths))))
+                seen_sequence_lengths.update(new_lengths)
+        first_use_index_set = {index for index, _ in first_use_indices}
+        steady_samples = [
+            record.seconds
+            for index, record in enumerate(records)
+            if index not in first_use_index_set
+        ]
+        steady_measurement_indices = _steady_measurement_indices(
+            len(records),
+            warmup_count=profile_warmup_steps,
+            first_use_indices=first_use_index_set,
+        )
+        steady_measurement_samples = [
+            records[index].seconds for index in steady_measurement_indices
+        ]
+        steady_step_e2e_summary = _timing_summary(
+            steady_measurement_samples,
+            warmup_count=0,
+        )
         steady_reference = (
-            statistics.median(step_e2e_seconds[1:])
-            if len(step_e2e_seconds) > 1 else None
+            statistics.median(steady_samples)
+            if steady_samples else None
         )
         estimated_compile_seconds = (
-            max(0.0, step_e2e_seconds[0] - steady_reference)
-            if step_e2e_seconds and steady_reference is not None else None
+            sum(
+                max(0.0, records[index].seconds - steady_reference)
+                for index, _ in first_use_indices
+            )
+            if first_use_indices and steady_reference is not None else None
         )
+        bucket_first_use = [
+            {
+                "step": records[index].step,
+                "sequence_lengths": list(lengths),
+                "seconds": records[index].seconds,
+                "estimated_compile_seconds": (
+                    max(0.0, records[index].seconds - steady_reference)
+                    if steady_reference is not None else None
+                ),
+            }
+            for index, lengths in first_use_indices
+        ]
         peft_execution_paths: dict[str, int] = {}
         moe_execution_paths: dict[str, int] = {}
+        moe_owner_runtime: list[dict[str, Any]] = []
         for module in uncompiled_model.modules():
             path = getattr(module, "last_execution_path", None)
             if isinstance(path, str):
@@ -1620,8 +1768,29 @@ def run(
                 moe_execution_paths[moe_path] = (
                     moe_execution_paths.get(moe_path, 0) + 1
                 )
+                selected_count = getattr(
+                    module, "last_selected_assignment_count", None
+                )
+                packed_count = getattr(
+                    module, "last_packed_slot_count", None
+                )
+                expert_count = getattr(module, "expert_count", None)
+                top_k = getattr(module, "top_k", None)
+                moe_owner_runtime.append({
+                    "schedule": moe_path,
+                    "expert_count": expert_count,
+                    "top_k": top_k,
+                    "selected_assignment_count": selected_count,
+                    "physical_packed_slot_count": packed_count,
+                    "ideal_selected_expert_fraction": (
+                        float(top_k) / float(expert_count)
+                        if isinstance(top_k, int)
+                        and isinstance(expert_count, int)
+                        and expert_count > 0 else None
+                    ),
+                })
         moe_numerical_contract = (
-            "deterministic_native_sparse_bf16_hifi4_fp32_v1"
+            "deterministic_no_drop_selected_block_bf16_hifi4_fp32_v1"
             if moe_execution_paths.get("dynamic_native_expert_bucketed", 0) > 0
             else "safe_bf16_reference"
         )
@@ -1653,6 +1822,9 @@ def run(
                 "step_padded_tokens": [
                     record.padded_tokens for record in records
                 ],
+                "step_sequence_lengths": [
+                    list(record.sequence_lengths) for record in records
+                ],
                 "step_data_wait_seconds": [
                     record.data_wait_seconds for record in records
                 ],
@@ -1673,6 +1845,28 @@ def run(
                 "gradient_audit": operations.gradient_audit,
                 "peft_execution_paths": peft_execution_paths,
                 "moe_execution_paths": moe_execution_paths,
+                "moe_execution_contract": {
+                    "owners": moe_owner_runtime,
+                    "host_token_routing_loop": (
+                        False if moe_execution_paths else None
+                    ),
+                    "evaluates_all_experts": (
+                        False if moe_execution_paths else None
+                    ),
+                    "capacity_semantics": (
+                        "exact_no_drop_per_expert_token_bound"
+                        if moe_execution_paths.get(
+                            "dynamic_native_expert_bucketed", 0
+                        ) > 0 else None
+                    ),
+                    "routing_location": "device",
+                    "expert_block_rows": (
+                        32
+                        if moe_execution_paths.get(
+                            "dynamic_native_expert_bucketed", 0
+                        ) > 0 else None
+                    ),
+                },
                 "moe_numerical_contract": moe_numerical_contract,
                 "ttnn_forward_graph": {
                     "requested": capture_ttnn_forward_graph,
@@ -1698,8 +1892,12 @@ def run(
                     ),
                 },
                 "steady_step_seconds": (
-                    step_e2e_summary["mean_seconds"]
+                    steady_step_e2e_summary["mean_seconds"]
                 ),
+                "steady_measurement_steps": [
+                    records[index].step
+                    for index in steady_measurement_indices
+                ],
                 "checkpoint": checkpoint,
                 "token_row_coupling": token_row_coupling,
                 "optimizer_placement": (
@@ -1710,12 +1908,20 @@ def run(
                 "phase_seconds": phase_seconds,
                 "phase_summaries": phase_summaries,
                 "step_e2e_summary": step_e2e_summary,
+                "steady_step_e2e_summary": steady_step_e2e_summary,
                 "compile": {
                     "cache": str(xla_cache) if xla_cache is not None else None,
                     "first_step_seconds": (
                         step_e2e_seconds[0] if step_e2e_seconds else None
                     ),
                     "estimated_compile_seconds": estimated_compile_seconds,
+                    "bucket_first_use": bucket_first_use,
+                    "expected_sequence_buckets": sorted(
+                        expected_compile_buckets
+                    ),
+                    "observed_sequence_buckets": sorted(
+                        seen_sequence_lengths
+                    ),
                     "cross_process_executable_reuse": False,
                     "limitation": (
                         "PJRT executable deserialization is not implemented; "
@@ -1724,10 +1930,12 @@ def run(
                 },
             }
         )
-        metrics_path.write_text(
-            json.dumps(metrics, indent=2) + "\n",
-            encoding="utf-8",
+        record_stage("checkpoint_and_export", "completed")
+        metrics["startup_profile"]["current_stage"] = "completed"
+        metrics["startup_profile"]["total_seconds"] = (
+            time.perf_counter() - startup_started
         )
+        publish_metrics()
         logger.info(f"Saved direct-worker metrics: {metrics_path}")
         return metrics
     except Exception as error:
@@ -1738,10 +1946,11 @@ def run(
                 "traceback": traceback.format_exc(),
             }
         )
-        metrics_path.write_text(
-            json.dumps(metrics, indent=2) + "\n",
-            encoding="utf-8",
+        metrics.setdefault("startup_profile", {})["current_stage"] = "failed"
+        metrics["startup_profile"]["total_seconds"] = (
+            time.perf_counter() - startup_started
         )
+        publish_metrics()
         raise
     finally:
         logger.finish()

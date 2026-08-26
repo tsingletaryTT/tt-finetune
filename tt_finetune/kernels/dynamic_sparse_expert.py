@@ -100,172 +100,584 @@ def expert_block_sparsity(
     return exact, blocks
 
 
-def _sparse_matmul(
-    left: torch.Tensor,
-    right: torch.Tensor,
-    sparsity: torch.Tensor,
-    *,
-    input_a_sparse: bool,
-) -> torch.Tensor:
-    # Importing tt_torch registers torch.ops.tt.* without making TT-XLA a
-    # package import requirement for users who only inspect the planner.
-    import tt_torch  # noqa: F401
+def _validate_shared_inputs(
+    inputs: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+    selected_indices: torch.Tensor,
+) -> tuple[int, int, int, int]:
+    if inputs.ndim != 3 or weight.ndim != 3:
+        raise ValueError("dynamic shared expert linear requires rank-3 tensors")
+    tokens, top_k, input_features = inputs.shape
+    experts, output_features, weight_input = weight.shape
+    if input_features != weight_input:
+        raise ValueError("dynamic expert linear input/weight mismatch")
+    if selected_indices.shape != (tokens, top_k):
+        raise ValueError("dynamic expert selection/input shape mismatch")
+    if block_sparsity.shape != (1, 1, tokens // TILE, experts):
+        raise ValueError("dynamic expert block-sparsity shape mismatch")
+    error = dynamic_sparse_support_error(
+        tokens=tokens,
+        experts=experts,
+        input_features=input_features,
+        output_features=output_features,
+    )
+    if error is not None:
+        raise ValueError(error)
+    return tokens, experts, input_features, output_features
 
-    return torch.ops.tt.sparse_matmul(
-        left,
-        right,
-        sparsity,
-        nnz=0,
-        is_input_a_sparse=input_a_sparse,
-        is_input_b_sparse=not input_a_sparse,
+
+def _validate_expert_inputs(
+    inputs: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+    selected_indices: torch.Tensor,
+) -> tuple[int, int, int, int]:
+    if inputs.ndim != 3 or weight.ndim != 3:
+        raise ValueError("dynamic expert-specific linear requires rank-3 tensors")
+    tokens, experts, input_features = inputs.shape
+    weight_experts, output_features, weight_input = weight.shape
+    if experts != weight_experts or input_features != weight_input:
+        raise ValueError("dynamic expert-specific input/weight mismatch")
+    if selected_indices.ndim != 2 or selected_indices.shape[0] != tokens:
+        raise ValueError("dynamic expert selection/input shape mismatch")
+    if block_sparsity.shape != (1, 1, tokens // TILE, experts):
+        raise ValueError("dynamic expert block-sparsity shape mismatch")
+    error = dynamic_sparse_support_error(
+        tokens=tokens,
+        experts=experts,
+        input_features=input_features,
+        output_features=output_features,
+    )
+    if error is not None:
+        raise ValueError(error)
+    return tokens, experts, input_features, output_features
+
+
+def _cpu_active_token_mask(
+    block_sparsity: torch.Tensor, *, tokens: int, experts: int
+) -> torch.Tensor:
+    return (
+        block_sparsity.reshape(tokens // TILE, experts)
+        .unsqueeze(1)
+        .expand(-1, TILE, -1)
+        .reshape(tokens, experts)
     )
 
 
-class _SharedInputExpertLinear(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, inputs, weight, block_sparsity, selected_indices):
-        # inputs [T,K,I] is the same expanded view used by the safe selected
-        # path.  Forward needs one physical token row; backward deliberately
-        # returns one gradient per top-k lane so PyTorch performs the final K
-        # reduction at the same graph boundary as the reference.
-        tokens, top_k, input_features = inputs.shape
-        experts, output_features, weight_input = weight.shape
-        if input_features != weight_input:
-            raise ValueError("dynamic expert linear input/weight mismatch")
-        error = dynamic_sparse_support_error(
-            tokens=tokens,
-            experts=experts,
-            input_features=input_features,
-            output_features=output_features,
-        )
-        if error is not None:
-            raise ValueError(error)
-        physical_weight = _pad_sparse_output_weight(weight)
-        physical_output_features = int(physical_weight.shape[1])
-        tiled = _sparse_matmul(
-            inputs[:, 0, :].reshape(1, 1, tokens, input_features),
-            physical_weight.transpose(1, 2).unsqueeze(0).contiguous(),
-            block_sparsity,
-            input_a_sparse=False,
-        )
-        # [1,Tb,E,32,O] -> [T,E,O]
-        output = tiled.squeeze(0).permute(0, 2, 1, 3).reshape(
-            tokens, experts, physical_output_features
-        )[:, :, :output_features]
-        ctx.save_for_backward(inputs, weight, selected_indices)
-        return output
+def packed_expert_block_sparsity(
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+    *,
+    expert_count: int,
+    slot_count: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Return active blocks for exact per-expert no-drop assignment slots."""
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        inputs, weight, selected_indices = ctx.saved_tensors
-        tokens, top_k = selected_indices.shape
-        token_ids = torch.arange(
-            tokens, dtype=selected_indices.dtype, device=selected_indices.device
-        ).unsqueeze(1)
-        selected_grad = grad_output[token_ids, selected_indices]
-        selected_weight = weight[selected_indices]
-        grad_inputs = torch.bmm(
-            selected_grad.reshape(-1, 1, selected_grad.shape[-1]),
-            selected_weight.reshape(
-                -1, selected_weight.shape[-2], selected_weight.shape[-1]
-            ),
-        ).reshape(tokens, top_k, inputs.shape[-1])
-        grad_weight = None
-        if ctx.needs_input_grad[1]:
-            per_assignment = torch.bmm(
-                selected_grad.reshape(-1, selected_grad.shape[-1], 1),
-                inputs.reshape(-1, 1, inputs.shape[-1]),
-            )
-            expert_ids = torch.arange(
-                weight.shape[0],
-                dtype=selected_indices.dtype,
-                device=selected_indices.device,
-            )
-            selector = (
-                selected_indices.reshape(-1, 1)
-                == expert_ids.reshape(1, -1)
-            ).to(per_assignment.dtype)
-            grad_weight = torch.matmul(
-                selector.transpose(0, 1),
-                per_assignment.reshape(per_assignment.shape[0], -1),
-            ).reshape_as(weight)
-        return grad_inputs, grad_weight, None, None
+    if selected_indices.shape != positions.shape or selected_indices.ndim != 2:
+        raise ValueError("selected expert indices/positions must share [T,K]")
+    if slot_count <= 0 or slot_count % TILE:
+        raise ValueError("dynamic expert slot count must be positive and /32")
+    assignments = int(selected_indices.numel())
+    flat_indices = selected_indices.reshape(assignments)
+    flat_positions = positions.reshape(assignments)
+    expert_ids = torch.arange(
+        expert_count,
+        dtype=flat_indices.dtype,
+        device=flat_indices.device,
+    )
+    block_ids = torch.arange(
+        slot_count // TILE,
+        dtype=flat_positions.dtype,
+        device=flat_positions.device,
+    )
+    return (
+        (
+            flat_indices.reshape(assignments, 1, 1)
+            == expert_ids.reshape(1, 1, expert_count)
+        )
+        & (
+            (flat_positions // TILE).reshape(assignments, 1, 1)
+            == block_ids.reshape(1, slot_count // TILE, 1)
+        )
+    ).any(dim=0).to(dtype).reshape(
+        1, 1, slot_count // TILE, expert_count
+    )
 
 
-class _ExpertInputLinear(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, inputs, weight, block_sparsity, selected_indices):
-        # inputs [T,E,I], weight [E,O,I]
-        tokens, experts, input_features = inputs.shape
-        weight_experts, output_features, weight_input = weight.shape
-        if experts != weight_experts or input_features != weight_input:
-            raise ValueError("dynamic expert-specific input/weight mismatch")
-        error = dynamic_sparse_support_error(
-            tokens=tokens,
-            experts=experts,
-            input_features=input_features,
-            output_features=output_features,
-        )
-        if error is not None:
-            raise ValueError(error)
-        tiled_inputs = inputs.reshape(
-            tokens // TILE, TILE, experts, input_features
+@torch.library.custom_op(
+    "tt_finetune::dynamic_pack_expert_assignments",
+    mutates_args=[],
+    device_types=["cpu", "xla"],
+)
+def _dynamic_pack_expert_assignments_op(
+    inputs: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+    expert_count: int,
+) -> torch.Tensor:
+    """Pack [T,K,H] assignments into [T,E,H] without dense dispatch GEMM."""
+
+    if inputs.ndim != 3 or selected_indices.shape != inputs.shape[:2]:
+        raise ValueError("dynamic assignment pack requires [T,K,H] inputs")
+    if positions.shape != selected_indices.shape:
+        raise ValueError("dynamic assignment positions must match selection")
+    tokens, top_k, width = inputs.shape
+    assignments = tokens * top_k
+    flat_inputs = inputs.reshape(assignments, width)
+    flat_indices = selected_indices.reshape(assignments)
+    flat_positions = positions.reshape(assignments)
+    expert_ids = torch.arange(
+        expert_count,
+        dtype=flat_indices.dtype,
+        device=flat_indices.device,
+    )
+    slot_ids = torch.arange(
+        tokens,
+        dtype=flat_positions.dtype,
+        device=flat_positions.device,
+    )
+    matches = (
+        flat_indices.reshape(1, 1, assignments)
+        == expert_ids.reshape(expert_count, 1, 1)
+    ) & (
+        flat_positions.reshape(1, 1, assignments)
+        == slot_ids.reshape(1, tokens, 1)
+    )
+    valid = matches.any(dim=-1)
+    assignment_ids = torch.arange(
+        assignments, dtype=torch.float32, device=inputs.device
+    )
+    inverse = (
+        matches.to(torch.float32)
+        * assignment_ids.reshape(1, 1, assignments)
+    ).sum(dim=-1).to(torch.long)
+    expert_major = flat_inputs[inverse]
+    expert_major = expert_major * valid.to(inputs.dtype).unsqueeze(-1)
+    return expert_major.transpose(0, 1)
+
+
+@_dynamic_pack_expert_assignments_op.register_fake
+def _dynamic_pack_expert_assignments_fake(
+    inputs: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+    expert_count: int,
+) -> torch.Tensor:
+    del selected_indices, positions
+    return inputs.new_empty((inputs.shape[0], expert_count, inputs.shape[2]))
+
+
+def _assignment_dispatch_matrix(
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+    *,
+    expert_count: int,
+    dtype: torch.dtype,
+) -> torch.Tensor:
+    """Return the exact assignment-to-packed-slot map used in gradients.
+
+    Advanced multi-axis indexing lowers correctly in forward on the current TT
+    backend but produces invalid values when used inside these autograd
+    formulas.  Keep the efficient gather in the user-visible forward and use a
+    plain matmul dispatch map at the two backward boundaries.  The map has one
+    nonzero per assignment and therefore introduces neither capacity loss nor
+    expert duplication.
+    """
+
+    tokens = int(selected_indices.shape[0])
+    flat_slot = (
+        positions.reshape(-1) * int(expert_count)
+        + selected_indices.reshape(-1)
+    )
+    packed_slot = torch.arange(
+        tokens * int(expert_count),
+        dtype=flat_slot.dtype,
+        device=flat_slot.device,
+    )
+    return (
+        flat_slot.reshape(-1, 1) == packed_slot.reshape(1, -1)
+    ).to(dtype)
+
+
+def _backward_restore_assignments(
+    packed: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+) -> torch.Tensor:
+    """Reliably restore packed gradients to token-major assignments on TT."""
+
+    # Use a single-axis gather over the physical packed-slot dimension.  The
+    # TT lowering corruption is specific to the multi-axis advanced indexing
+    # form; this flattened form shares the already-qualified forward gather
+    # lowering and performs no reduction or rounding.
+    flat_slot = (
+        positions.reshape(-1) * int(packed.shape[1])
+        + selected_indices.reshape(-1)
+    )
+    return packed.reshape(-1, packed.shape[-1])[flat_slot].reshape(
+        *selected_indices.shape, packed.shape[-1]
+    )
+
+
+def _backward_pack_assignments(
+    values: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+    *,
+    expert_count: int,
+) -> torch.Tensor:
+    """Reliably pack token-major gradients into no-drop expert slots on TT."""
+
+    dispatch = _assignment_dispatch_matrix(
+        selected_indices,
+        positions,
+        expert_count=expert_count,
+        dtype=values.dtype,
+    )
+    packed = dispatch.transpose(0, 1) @ values.reshape(-1, values.shape[-1])
+    return packed.reshape(
+        selected_indices.shape[0], expert_count, values.shape[-1]
+    )
+
+
+def _pack_setup_context(ctx, inputs, output) -> None:
+    del output
+    values, selected_indices, positions, expert_count = inputs
+    ctx.save_for_backward(selected_indices, positions)
+    ctx.input_shape = tuple(values.shape)
+    ctx.expert_count = int(expert_count)
+
+
+def _pack_backward(ctx, grad_packed):
+    selected_indices, positions = ctx.saved_tensors
+    grad_inputs = _backward_restore_assignments(
+        grad_packed, selected_indices, positions
+    )
+    return grad_inputs.reshape(ctx.input_shape), None, None, None
+
+
+_dynamic_pack_expert_assignments_op.register_autograd(
+    _pack_backward, setup_context=_pack_setup_context
+)
+
+
+@torch.library.custom_op(
+    "tt_finetune::dynamic_restore_expert_assignments",
+    mutates_args=[],
+    device_types=["cpu", "xla"],
+)
+def _dynamic_restore_expert_assignments_op(
+    packed: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+) -> torch.Tensor:
+    """Restore [T,E,H] expert slots into token-major [T,K,H]."""
+
+    if packed.ndim != 3 or selected_indices.shape != positions.shape:
+        raise ValueError("dynamic assignment restore geometry mismatch")
+    if packed.shape[0] != selected_indices.shape[0]:
+        raise ValueError("dynamic assignment restore token mismatch")
+    return packed[positions, selected_indices]
+
+
+@_dynamic_restore_expert_assignments_op.register_fake
+def _dynamic_restore_expert_assignments_fake(
+    packed: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+) -> torch.Tensor:
+    del positions
+    return packed.new_empty(
+        (packed.shape[0], selected_indices.shape[1], packed.shape[2])
+    )
+
+
+def _restore_setup_context(ctx, inputs, output) -> None:
+    del output
+    packed, selected_indices, positions = inputs
+    ctx.save_for_backward(selected_indices, positions)
+    ctx.expert_count = int(packed.shape[1])
+
+
+def _restore_backward(ctx, grad_selected):
+    selected_indices, positions = ctx.saved_tensors
+    grad_packed = _backward_pack_assignments(
+        grad_selected,
+        selected_indices,
+        positions,
+        expert_count=ctx.expert_count,
+    )
+    return grad_packed, None, None
+
+
+_dynamic_restore_expert_assignments_op.register_autograd(
+    _restore_backward, setup_context=_restore_setup_context
+)
+
+
+@torch.library.custom_op(
+    "tt_finetune::dynamic_sparse_expert_input_gradient",
+    mutates_args=[],
+    device_types=["cpu", "xla"],
+)
+def _dynamic_sparse_expert_input_gradient_op(
+    grad_output: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+) -> torch.Tensor:
+    """Compute per-token/per-expert dInput without gathering expert weights.
+
+    ``weight[selected_indices]`` lowers to an embedding whose logical output is
+    T*K*O*I.  For real MoE weights that temporary is gigabytes and its TTNN
+    circular buffer exceeds per-core L1.  The transpose-aware sparse matmul
+    below consumes the unchanged expert-major weight once and schedules only
+    active token/expert blocks.  Exact selected lanes are gathered only after
+    this much smaller T*E*I result exists.
+    """
+
+    if grad_output.ndim != 3 or weight.ndim != 3:
+        raise ValueError("dynamic sparse input gradient requires rank-3 tensors")
+    tokens, experts, output_features = grad_output.shape
+    weight_experts, weight_output, input_features = weight.shape
+    if experts != weight_experts or output_features != weight_output:
+        raise ValueError("dynamic sparse input-gradient geometry mismatch")
+    if block_sparsity.shape != (1, 1, tokens // TILE, experts):
+        raise ValueError("dynamic sparse input-gradient routing shape mismatch")
+    error = dynamic_sparse_support_error(
+        tokens=tokens,
+        experts=experts,
+        input_features=output_features,
+        output_features=input_features,
+    )
+    if error is not None:
+        raise ValueError(error)
+
+    if grad_output.device.type == "xla":
+        from torch_xla.experimental import stablehlo_custom_call
+
+        tiled_gradient = grad_output.reshape(
+            tokens // TILE, TILE, experts, output_features
         ).permute(0, 2, 1, 3).contiguous()
-        physical_weight = _pad_sparse_output_weight(weight)
-        physical_output_features = int(physical_weight.shape[1])
-        tiled = _sparse_matmul(
-            tiled_inputs,
-            physical_weight.transpose(1, 2).unsqueeze(0).contiguous(),
-            block_sparsity,
-            input_a_sparse=True,
+        transposed_weight = weight.transpose(1, 2).contiguous()
+        physical_weight = _pad_sparse_output_weight(transposed_weight)
+        physical_input_features = int(physical_weight.shape[1])
+        right = physical_weight.transpose(1, 2).unsqueeze(0).contiguous()
+        tiled = stablehlo_custom_call.stablehlo_custom_call(
+            [tiled_gradient, right, block_sparsity],
+            "tt.sparse_matmul",
+            [[tokens // TILE, experts, TILE, physical_input_features]],
+            [grad_output.dtype],
+            frontend_attributes={
+                "is_input_a_sparse": "True",
+                "is_input_b_sparse": "False",
+                "nnz": "0",
+            },
         )
-        output = tiled.permute(0, 2, 1, 3).reshape(
+        return tiled.permute(0, 2, 1, 3).reshape(
+            tokens, experts, physical_input_features
+        )[:, :, :input_features]
+
+    result = torch.einsum(
+        "teo,eoi->tei", grad_output.float(), weight.float()
+    ).to(grad_output.dtype)
+    active = _cpu_active_token_mask(
+        block_sparsity, tokens=tokens, experts=experts
+    )
+    return result * active.to(result.dtype).unsqueeze(-1)
+
+
+@_dynamic_sparse_expert_input_gradient_op.register_fake
+def _dynamic_sparse_expert_input_gradient_fake(
+    grad_output: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+) -> torch.Tensor:
+    del block_sparsity
+    return grad_output.new_empty(
+        (grad_output.shape[0], grad_output.shape[1], weight.shape[2])
+    )
+
+
+@torch.library.custom_op(
+    "tt_finetune::dynamic_shared_input_expert_linear",
+    mutates_args=[],
+    device_types=["cpu", "xla"],
+)
+def _dynamic_shared_input_expert_linear_op(
+    inputs: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+    selected_indices: torch.Tensor,
+) -> torch.Tensor:
+    """Selected-expert projection with an autograd-visible routing owner.
+
+    Keeping ``selected_indices`` in this public operator schema is essential.
+    Dynamo may trace through a Python ``autograd.Function`` and expose the raw
+    inference-only ``tt.sparse_matmul`` to autograd.  This registered operator
+    remains opaque, lowers to the same TT sparse custom call, and gives the
+    backward formula the exact token/expert assignments instead of only the
+    coarser 32-token block bitmap.
+    """
+
+    tokens, experts, input_features, output_features = _validate_shared_inputs(
+        inputs, weight, block_sparsity, selected_indices
+    )
+    physical_weight = _pad_sparse_output_weight(weight)
+    physical_output_features = int(physical_weight.shape[1])
+    if inputs.device.type == "xla":
+        from torch_xla.experimental import stablehlo_custom_call
+
+        left = inputs[:, 0, :].reshape(
+            1, tokens // TILE, TILE, input_features
+        )
+        right = physical_weight.transpose(1, 2).unsqueeze(0).contiguous()
+        sparsity = block_sparsity.reshape(
+            1, tokens // TILE, 1, experts
+        )
+        tiled = stablehlo_custom_call.stablehlo_custom_call(
+            [left, right, sparsity],
+            "tt.sparse_matmul",
+            [[1, tokens // TILE, 1, experts, TILE, physical_output_features]],
+            [inputs.dtype],
+            frontend_attributes={
+                "is_input_a_sparse": "False",
+                "is_input_b_sparse": "True",
+                "nnz": "0",
+            },
+        )
+        return tiled.squeeze(0).squeeze(1).permute(0, 2, 1, 3).reshape(
             tokens, experts, physical_output_features
         )[:, :, :output_features]
-        ctx.save_for_backward(inputs, weight, selected_indices)
-        return output
 
-    @staticmethod
-    def backward(ctx, grad_output):
-        inputs, weight, selected_indices = ctx.saved_tensors
-        tokens, top_k = selected_indices.shape
-        token_ids = torch.arange(
-            tokens, dtype=selected_indices.dtype, device=selected_indices.device
-        ).unsqueeze(1)
-        selected_grad = grad_output[token_ids, selected_indices]
-        selected_weight = weight[selected_indices]
-        selected_inputs = inputs[token_ids, selected_indices]
-        selected_grad_inputs = torch.bmm(
-            selected_grad.reshape(-1, 1, selected_grad.shape[-1]),
-            selected_weight.reshape(
-                -1, selected_weight.shape[-2], selected_weight.shape[-1]
-            ),
-        ).reshape(tokens, top_k, inputs.shape[-1])
-        expert_ids = torch.arange(
-            weight.shape[0],
-            dtype=selected_indices.dtype,
-            device=selected_indices.device,
+    base = torch.einsum(
+        "ti,eoi->teo", inputs[:, 0, :].float(), weight.float()
+    ).to(inputs.dtype)
+    active = _cpu_active_token_mask(
+        block_sparsity, tokens=tokens, experts=experts
+    )
+    return base * active.to(base.dtype).unsqueeze(-1)
+
+
+@_dynamic_shared_input_expert_linear_op.register_fake
+def _dynamic_shared_input_expert_linear_fake(
+    inputs: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+    selected_indices: torch.Tensor,
+) -> torch.Tensor:
+    del block_sparsity, selected_indices
+    return inputs.new_empty((inputs.shape[0], weight.shape[0], weight.shape[1]))
+
+
+def _shared_setup_context(ctx, inputs, output) -> None:
+    del output
+    values, weight, block_sparsity, selected_indices = inputs
+    ctx.save_for_backward(values, weight, block_sparsity, selected_indices)
+
+
+def _shared_backward(ctx, grad_output):
+    inputs, weight, block_sparsity, selected_indices = ctx.saved_tensors
+    tokens, top_k = selected_indices.shape
+    token_ids = torch.arange(
+        tokens, dtype=selected_indices.dtype, device=selected_indices.device
+    ).unsqueeze(1)
+    if ctx.needs_input_grad[1]:
+        raise RuntimeError(
+            "dynamic sparse expert base weights must remain frozen"
         )
-        selector_3d = (
-            selected_indices.unsqueeze(-1)
-            == expert_ids.reshape(1, 1, -1)
-        ).to(selected_grad_inputs.dtype)
-        grad_inputs = (
-            selected_grad_inputs.unsqueeze(2)
-            * selector_3d.unsqueeze(-1)
-        ).sum(dim=1)
-        grad_weight = None
-        if ctx.needs_input_grad[1]:
-            per_assignment = torch.bmm(
-                selected_grad.reshape(-1, selected_grad.shape[-1], 1),
-                selected_inputs.reshape(-1, 1, inputs.shape[-1]),
-            )
-            selector = selector_3d.reshape(-1, weight.shape[0])
-            grad_weight = torch.matmul(
-                selector.transpose(0, 1),
-                per_assignment.reshape(per_assignment.shape[0], -1),
-            ).reshape_as(weight)
-        return grad_inputs, grad_weight, None, None
+    per_expert = _dynamic_sparse_expert_input_gradient_op(
+        grad_output, weight, block_sparsity
+    )
+    grad_inputs = per_expert[token_ids, selected_indices]
+    return grad_inputs, None, None, None
+
+
+_dynamic_shared_input_expert_linear_op.register_autograd(
+    _shared_backward, setup_context=_shared_setup_context
+)
+
+
+@torch.library.custom_op(
+    "tt_finetune::dynamic_expert_input_linear",
+    mutates_args=[],
+    device_types=["cpu", "xla"],
+)
+def _dynamic_expert_input_linear_op(
+    inputs: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+    selected_indices: torch.Tensor,
+) -> torch.Tensor:
+    tokens, experts, input_features, output_features = _validate_expert_inputs(
+        inputs, weight, block_sparsity, selected_indices
+    )
+    tiled_inputs = inputs.reshape(
+        tokens // TILE, TILE, experts, input_features
+    ).permute(0, 2, 1, 3).contiguous()
+    physical_weight = _pad_sparse_output_weight(weight)
+    physical_output_features = int(physical_weight.shape[1])
+    if inputs.device.type == "xla":
+        from torch_xla.experimental import stablehlo_custom_call
+
+        right = physical_weight.transpose(1, 2).unsqueeze(0).contiguous()
+        tiled = stablehlo_custom_call.stablehlo_custom_call(
+            [tiled_inputs, right, block_sparsity],
+            "tt.sparse_matmul",
+            [[tokens // TILE, experts, TILE, physical_output_features]],
+            [inputs.dtype],
+            frontend_attributes={
+                "is_input_a_sparse": "True",
+                "is_input_b_sparse": "False",
+                "nnz": "0",
+            },
+        )
+        return tiled.permute(0, 2, 1, 3).reshape(
+            tokens, experts, physical_output_features
+        )[:, :, :output_features]
+
+    base = torch.einsum("tei,eoi->teo", inputs.float(), weight.float()).to(
+        inputs.dtype
+    )
+    active = _cpu_active_token_mask(
+        block_sparsity, tokens=tokens, experts=experts
+    )
+    return base * active.to(base.dtype).unsqueeze(-1)
+
+
+@_dynamic_expert_input_linear_op.register_fake
+def _dynamic_expert_input_linear_fake(
+    inputs: torch.Tensor,
+    weight: torch.Tensor,
+    block_sparsity: torch.Tensor,
+    selected_indices: torch.Tensor,
+) -> torch.Tensor:
+    del block_sparsity, selected_indices
+    return inputs.new_empty((inputs.shape[0], weight.shape[0], weight.shape[1]))
+
+
+def _expert_setup_context(ctx, inputs, output) -> None:
+    del output
+    values, weight, block_sparsity, selected_indices = inputs
+    ctx.save_for_backward(values, weight, block_sparsity, selected_indices)
+
+
+def _expert_backward(ctx, grad_output):
+    _inputs, weight, block_sparsity, _selected_indices = ctx.saved_tensors
+    if ctx.needs_input_grad[1]:
+        raise RuntimeError(
+            "dynamic sparse expert base weights must remain frozen"
+        )
+    grad_inputs = _dynamic_sparse_expert_input_gradient_op(
+        grad_output, weight, block_sparsity
+    )
+    return grad_inputs, None, None, None
+
+
+_dynamic_expert_input_linear_op.register_autograd(
+    _expert_backward, setup_context=_expert_setup_context
+)
 
 
 def dynamic_shared_input_expert_linear(
@@ -274,8 +686,29 @@ def dynamic_shared_input_expert_linear(
     block_sparsity: torch.Tensor,
     selected_indices: torch.Tensor,
 ) -> torch.Tensor:
-    return _SharedInputExpertLinear.apply(
+    return _dynamic_shared_input_expert_linear_op(
         inputs, weight, block_sparsity, selected_indices
+    )
+
+
+def dynamic_pack_expert_assignments(
+    inputs: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+    expert_count: int,
+) -> torch.Tensor:
+    return _dynamic_pack_expert_assignments_op(
+        inputs, selected_indices, positions, expert_count
+    )
+
+
+def dynamic_restore_expert_assignments(
+    packed: torch.Tensor,
+    selected_indices: torch.Tensor,
+    positions: torch.Tensor,
+) -> torch.Tensor:
+    return _dynamic_restore_expert_assignments_op(
+        packed, selected_indices, positions
     )
 
 
@@ -285,15 +718,18 @@ def dynamic_expert_input_linear(
     block_sparsity: torch.Tensor,
     selected_indices: torch.Tensor,
 ) -> torch.Tensor:
-    return _ExpertInputLinear.apply(
+    return _dynamic_expert_input_linear_op(
         inputs, weight, block_sparsity, selected_indices
     )
 
 
 __all__ = [
     "dynamic_expert_input_linear",
+    "dynamic_pack_expert_assignments",
+    "dynamic_restore_expert_assignments",
     "dynamic_sparse_physical_output_features",
     "dynamic_shared_input_expert_linear",
     "dynamic_sparse_support_error",
     "expert_block_sparsity",
+    "packed_expert_block_sparsity",
 ]

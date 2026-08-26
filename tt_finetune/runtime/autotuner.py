@@ -349,6 +349,34 @@ def _candidate_signature(values: Mapping[str, Any]) -> str:
     return "g-" + _stable_digest(dict(values), length=16)
 
 
+def _peft_topology_rejections(
+    strategy: str,
+    target_roles: set[str],
+) -> tuple[str, ...]:
+    """Reject native owners that cannot bind the requested adapter graph."""
+
+    reasons: list[str] = []
+    has_mlp_group = {"gate", "up", "down"}.issubset(target_roles)
+    has_kv_group = {"k", "v"}.issubset(target_roles)
+    has_attention_group = {"q", "k", "v", "o"}.issubset(target_roles)
+    if strategy == "native_grouped" and not (
+        has_mlp_group or has_kv_group
+    ):
+        reasons.append(
+            "native grouped PEFT requires gate/up/down or K/V targets"
+        )
+    if strategy in {
+        "native_resident_mlp",
+        "native_resident_mlp_attention",
+    } and not has_mlp_group:
+        reasons.append("resident MLP PEFT requires gate/up/down targets")
+    if strategy == "native_resident_mlp_attention" and (
+        not has_attention_group
+    ):
+        reasons.append("resident attention PEFT requires Q/K/V/O targets")
+    return tuple(reasons)
+
+
 def _largest_core_multiple(limit: int, parallelism: int) -> int:
     parallelism = max(1, min(parallelism, limit))
     value = limit - (limit % parallelism)
@@ -397,15 +425,7 @@ def _candidate_knobs(request: PlannerRequest) -> list[dict[str, Any]]:
         "rank_tile_width": _ceil_to(plan.rank, TILE_SIZE),
         "optimizer_pack_bytes": 1024 * 1024,
         "optimizer_packing_strategy": "contiguous",
-        "graph_partition": (
-            "monolithic"
-            if (
-                plan.estimated_device_bytes <= 8 * 1024**3
-                and sequence <= 128
-                and descriptor.moe is None
-            )
-            else "phase_split_auto"
-        ),
+        "graph_partition": _default_graph_partition(request),
         "activation_policy": "framework_safe",
         "frozen_weight_policy": "framework_managed",
         "moe_schedule": plan.moe_execution_schedule,
@@ -531,6 +551,52 @@ def _candidate_knobs(request: PlannerRequest) -> list[dict[str, Any]]:
     for item in variants:
         unique[_candidate_signature(item)] = item
     return list(unique.values())
+
+
+def _large_reduced_boundary_requires_fusion(
+    request: PlannerRequest,
+) -> bool:
+    """Return whether exporting the forward boundary is not capacity-safe.
+
+    Reduced frozen-weight execution retains a BF16 source representation and
+    compiled block-float representations. A forward phase boundary also
+    exports autograd-saved reduced-weight views. On a large model this both
+    recreates the old pathological execution boundary and leaves too little
+    contiguous DRAM for later lazy-graph allocations, even when a coarse
+    aggregate byte estimate is below physical capacity.
+
+    The threshold is the same geometry limit used by the admitted monolithic
+    graph. The decision intentionally depends only on precision, semantic
+    graph shape and estimated memory -- never on checkpoint identity.
+    """
+
+    plan = request.safe_plan
+    return bool(
+        request.memory_mode in {
+            "bf8_frozen", "bf4_frozen", "hybrid_frozen",
+        }
+        and plan.sequence_length <= 128
+        and request.architecture.moe is None
+        and max(
+            int(plan.estimated_device_bytes),
+            int(request.estimated_device_bytes or 0),
+        ) > 8 * 1024**3
+    )
+
+
+def _default_graph_partition(request: PlannerRequest) -> str:
+    """Choose the safe static graph boundary from executable geometry."""
+
+    plan = request.safe_plan
+    if (
+        plan.estimated_device_bytes <= 8 * 1024**3
+        and plan.sequence_length <= 128
+        and request.architecture.moe is None
+    ):
+        return "monolithic"
+    if _large_reduced_boundary_requires_fusion(request):
+        return "forward_backward_fused"
+    return "phase_split_auto"
 
 
 def _evaluate_candidate(
@@ -714,6 +780,7 @@ def _evaluate_candidate(
         reasons.append("unsupported PEFT execution strategy")
     if knobs["peft_strategy"] != "framework_safe":
         adapter = dict(request.adapter_contract)
+        target_roles = {item.role for item in plan.lora_targets}
         if not (
             adapter.get("method", "lora") == "lora"
             and not adapter.get("use_rslora", False)
@@ -728,6 +795,9 @@ def _evaluate_candidate(
             reasons.append("native grouped PEFT is not wired for routed experts")
         if plan.rank > 128:
             reasons.append("native grouped PEFT supports logical rank <=128")
+        reasons.extend(_peft_topology_rejections(
+            knobs["peft_strategy"], target_roles
+        ))
         if knobs["peft_strategy"] == "native_resident_mlp_attention" and (
             descriptor.qkv_projection_layout != "separate"
         ):
@@ -777,6 +847,17 @@ def _evaluate_candidate(
         reasons.append(
             "forward/backward fusion requires an admitted short-sequence "
             "dense reduced-weight contract"
+        )
+    if (
+        knobs["graph_partition"] in {
+            "phase_split_auto", "phase_split_forward",
+        }
+        and _large_reduced_boundary_requires_fusion(request)
+    ):
+        reasons.append(
+            "a large reduced-weight graph must keep forward and backward "
+            "together; exporting the autograd-saved reduced-weight boundary "
+            "is not fragmentation-safe on one P150a"
         )
     if knobs["moe_schedule"] == "expert_capacity_bucketed":
         if descriptor.moe is None:

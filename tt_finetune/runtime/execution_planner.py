@@ -576,6 +576,16 @@ def plan_execution(
             moe.expert_capacity_factor is not None
             and moe.overflow_policy in {"drop", "residual"}
         )
+        dynamic_no_capacity = (
+            not capacity_bucketed
+            and moe.expert_capacity_factor is None
+            and descriptor.dtype == "bfloat16"
+            and logical_tokens % TILE_SIZE == 0
+            and descriptor.hidden_size % TILE_SIZE == 0
+            and expert_i % TILE_SIZE == 0
+            and moe.expert_count <= 32
+            and moe.top_k <= 8
+        )
         if capacity_bucketed:
             capacity = int(math.ceil(
                 moe.expert_capacity_factor
@@ -605,10 +615,37 @@ def plan_execution(
             moe_weight_replication_avoided_bytes = (
                 assignments * per_assignment_weights * dtype_bytes
             )
+        elif dynamic_no_capacity:
+            # Each expert owns one deterministic slot per token. This is an
+            # exact no-drop bound because top-k cannot select the same expert
+            # twice for a token. Only occupied 32-row blocks enter sparse
+            # matmul; the physical slot tensor is bounded and no expert weight
+            # is gathered per routed assignment.
+            packed_slots = logical_tokens * moe.expert_count
+            dispatch_elements = assignments * packed_slots
+            moe_routed_scratch_bytes = (
+                dispatch_elements * dtype_bytes
+                + assignments * descriptor.hidden_size * dtype_bytes
+            )
+            moe_selected_activation_bytes = (
+                packed_slots
+                * (2 * descriptor.hidden_size + selected_intermediate_width)
+                * dtype_bytes
+            )
+            # Boolean assignment map plus compact inverse/position metadata.
+            moe_routing_workspace_bytes = (
+                dispatch_elements
+                + packed_slots * 4
+                + assignments * (8 + 8)
+            )
+            moe_execution_schedule = "dynamic_native_expert_bucketed"
+            moe_packed_assignment_slots = packed_slots
+            moe_weight_replication_avoided_bytes = (
+                assignments * per_assignment_weights * dtype_bytes
+            )
         else:
-            # Architectures without a semantic capacity bound retain the exact
-            # selected-assignment fallback until the dynamic native expert
-            # scheduler is qualified. Never truncate them to make a plan fit.
+            # Unsupported dynamic geometries retain the exact selected-
+            # assignment fallback. Never truncate them to make a plan fit.
             moe_routed_scratch_bytes = (
                 assignments * per_assignment_weights * dtype_bytes
             )
@@ -804,6 +841,9 @@ def plan_execution(
         capacity_bucketed = (
             moe_execution_schedule == "expert_capacity_bucketed"
         )
+        dynamic_no_capacity = (
+            moe_execution_schedule == "dynamic_native_expert_bucketed"
+        )
         sparse_geometry_qualified = (
             descriptor.dtype == "bfloat16"
             and descriptor.hidden_size % TILE_SIZE == 0
@@ -818,6 +858,8 @@ def plan_execution(
                 if sparse_geometry_qualified else "safe_device_selected_experts"
             ),
             (
+                "canonical_sparse_moe_dynamic_no_drop_v1"
+                if sparse_geometry_qualified and dynamic_no_capacity else
                 "canonical_sparse_moe_capacity_bucketed_v1"
                 if sparse_geometry_qualified and capacity_bucketed else
                 "canonical_sparse_moe_v1"
@@ -828,6 +870,10 @@ def plan_execution(
                 if sparse_geometry_qualified else None
             ),
             (
+                "router and exact per-expert positions stay on device; one "
+                "slot per token bounds every expert without capacity loss; "
+                "only occupied 32-row expert blocks execute"
+                if sparse_geometry_qualified and dynamic_no_capacity else
                 "router, deterministic top-k, capacity packing, expert-batched "
                 "matmuls and weighted combine stay on device; expert matrices "
                 "are not replicated per assignment"

@@ -91,6 +91,10 @@ class TrainingConfig(BaseModel):
     # Derived by the memory planner after model inspection. This is an
     # internal execution contract, not a user-facing model-family switch.
     tt_selective_input_materialization: bool = Field(default=False)
+    # Runtime-selected streamed-attention geometry.  This is part of the
+    # measured execution ABI and must remain assignable on Pydantic configs
+    # when the worker consumes an autotuner winner.
+    tt_attention_query_chunk_tokens: int = Field(default=128, gt=0)
     tt_attention_backend: str = Field(default="auto")
     tt_moe_backend: str = Field(default="auto")
 

@@ -31,6 +31,15 @@ Qwen3-MoE semantic fixtures have silicon evidence. Unknown routing,
 capacity/drop semantics, or expert layouts fail closed rather than silently
 using dense semantics.
 
+The capacity-free dynamic path is qualified on Granite 3.1 MoE with 32 experts,
+top-8 routing, BF16, rank 8, and 128-token batches. Router decisions, exact
+per-expert positions, packing, and restoration remain on the device. Every
+selected assignment is retained; only occupied 32-row expert blocks enter the
+sparse expert projections. This path does not gather an expert matrix per
+assignment, evaluate every expert for every token, or route tokens in a Python
+host loop. Its published numerical contract is deterministic selected-block
+BF16 with HiFi4/FP32 reductions, not bit identity to the dense fallback.
+
 ## Memory admission
 
 The planner prefers BF16 when it fits. Qualified larger-model paths may use

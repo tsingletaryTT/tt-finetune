@@ -21,6 +21,7 @@ from blacksmith.datasets.torch.torch_dataset import BaseDataset
 from blacksmith.tools.templates.configs import TrainingConfig
 from tt_finetune.data_pipeline import (
     DATA_PLAN_VERSION,
+    bucket_for_length,
     data_contract_hash,
     normalize_sequence_buckets,
     plan_data_geometries,
@@ -42,18 +43,42 @@ class _PlannedBatchSampler:
 
 
 class _DynamicPaddingCollator:
-    def __init__(self, tokenizer, ignored_index, max_length, bucketed, callback):
-        self.collator = DataCollatorForSeq2Seq(
-            tokenizer=tokenizer,
-            padding=("longest" if bucketed else "max_length"),
-            max_length=max_length,
-            pad_to_multiple_of=(32 if bucketed else None),
-            label_pad_token_id=ignored_index,
+    def __init__(
+        self,
+        tokenizer,
+        ignored_index,
+        max_length,
+        bucketed,
+        callback,
+        boundaries=None,
+    ):
+        self.bucketed = bool(bucketed)
+        self.boundaries = (
+            normalize_sequence_buckets(max_length, boundaries)
+            if self.bucketed
+            else (int(max_length),)
         )
+        self.collators = {
+            boundary: DataCollatorForSeq2Seq(
+                tokenizer=tokenizer,
+                padding="max_length",
+                max_length=boundary,
+                label_pad_token_id=ignored_index,
+            )
+            for boundary in self.boundaries
+        }
         self.callback = callback
 
     def __call__(self, batch):
-        collated = self.collator(batch)
+        boundary = (
+            bucket_for_length(
+                max(len(item["input_ids"]) for item in batch),
+                self.boundaries,
+            )
+            if self.bucketed
+            else self.boundaries[-1]
+        )
+        collated = self.collators[boundary](batch)
         return self.callback(collated) if self.callback is not None else collated
 
 
@@ -673,6 +698,9 @@ class JSONLCausalDataset(BaseDataset):
     def _get_dataloader(self, *, epoch: int = 0):
         rows, _provenance = self._epoch_dataset(epoch)
         plan = self.epoch_plan(epoch)
+        return self._dataloader_from_batches(rows, plan.batches)
+
+    def _dataloader_from_batches(self, rows, batches):
         workers = self._automatic_workers(
             self.config.dataset_dataloader_workers,
             item_count=len(rows),
@@ -680,13 +708,14 @@ class JSONLCausalDataset(BaseDataset):
         )
         arguments = {
             "dataset": rows,
-            "batch_sampler": _PlannedBatchSampler(plan.batches),
+            "batch_sampler": _PlannedBatchSampler(batches),
             "collate_fn": _DynamicPaddingCollator(
                 self.tokenizer,
                 self.config.ignored_index,
                 self.config.max_length,
                 self.bucketing_enabled,
                 self.collate_fn,
+                self.config.dataset_sequence_buckets,
             ),
             "num_workers": workers,
             "persistent_workers": workers > 0,
@@ -699,6 +728,67 @@ class JSONLCausalDataset(BaseDataset):
             # collation/prefetch.
             arguments["multiprocessing_context"] = "spawn"
         return DataLoader(**arguments)
+
+    def get_compile_warmup_dataloader(
+        self,
+        boundaries,
+        *,
+        repeats: int = 4,
+        epoch: int = 0,
+    ):
+        """Return a bounded loader that covers every populated compile shape.
+
+        Ordinary epoch order is deliberately shuffled. Relying on its first
+        few batches can leave a rare sequence bucket cold for hundreds of
+        training steps. This qualification-only loader uses real batches and
+        the normal collator, but places one batch from each populated bucket
+        in a deterministic round-robin schedule. Its model/optimizer state is
+        discarded by the persistent compile warmup job.
+        """
+
+        if repeats <= 0:
+            raise ValueError("compile warmup repeats must be positive")
+        declared = set(normalize_sequence_buckets(
+            self.config.max_length,
+            self.config.dataset_sequence_buckets,
+        )) if self.bucketing_enabled else {
+            math.ceil(self.config.max_length / 32) * 32
+        }
+        requested = tuple(dict.fromkeys(int(value) for value in boundaries))
+        unsupported = sorted(set(requested) - declared)
+        if unsupported:
+            raise ValueError(
+                "compile warmup requested undeclared sequence buckets: "
+                f"{unsupported}"
+            )
+        rows, _provenance = self._epoch_dataset(epoch)
+        by_boundary = {boundary: [] for boundary in requested}
+        for batch in self.epoch_plan(epoch).batches:
+            if batch.sequence_length in by_boundary:
+                by_boundary[batch.sequence_length].append(batch)
+        populated = tuple(
+            boundary for boundary in requested if by_boundary[boundary]
+        )
+        if not populated:
+            raise ValueError(
+                "compile warmup found no real batches for the requested "
+                "sequence buckets"
+            )
+        selected = []
+        for repeat in range(repeats):
+            for boundary in populated:
+                candidates = by_boundary[boundary]
+                selected.append(candidates[repeat % len(candidates)])
+        self.compile_warmup_schedule = {
+            "requested_buckets": list(requested),
+            "populated_buckets": list(populated),
+            "empty_buckets": sorted(set(requested) - set(populated)),
+            "repeats": repeats,
+            "steps": len(selected),
+        }
+        return self._prepare_test_dataloader(
+            self._dataloader_from_batches(rows, selected)
+        )
 
     def get_dataloader_for_epoch(self, epoch: int):
         return self._prepare_test_dataloader(

@@ -23,9 +23,10 @@ from tt_finetune.architecture import (
 )
 from tt_finetune.kernels.dynamic_sparse_expert import (
     dynamic_expert_input_linear,
-    dynamic_shared_input_expert_linear,
+    dynamic_pack_expert_assignments,
+    dynamic_restore_expert_assignments,
     dynamic_sparse_support_error,
-    expert_block_sparsity,
+    packed_expert_block_sparsity,
 )
 
 
@@ -51,6 +52,9 @@ class SparseMoEInstallReport:
     rank: int
     host_token_routing_loop: bool
     evaluates_all_experts: bool
+    assignment_capacity: str
+    assignment_packing: str
+    expert_execution_granularity: str
     deterministic_contract: str
 
 
@@ -318,6 +322,13 @@ class GenericDeviceSparseMoELoRA(nn.Module):
                 "routed expert weights do not form a canonical MLP: "
                 f"{sorted(self.routed_weights)}"
             )
+        self.routed_layout = (
+            "fused_swiglu"
+            if "gate_up" in expected_roles
+            else "separate_swiglu"
+            if "gate" in expected_roles
+            else "ordinary"
+        )
         if any(
             value.ndim != 3 or int(value.shape[0]) != self.expert_count
             for value in self.routed_weights.values()
@@ -344,6 +355,7 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         self.last_router_z_loss: torch.Tensor | None = None
         self.last_execution_schedule: str | None = None
         self.last_packed_slot_count: int | None = None
+        self.last_selected_assignment_count: int | None = None
 
         self.routed_lora_A = nn.ParameterDict()
         self.routed_lora_B = nn.ParameterDict()
@@ -521,118 +533,94 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         restored = restored * valid.to(restored.dtype).unsqueeze(-1)
         return restored.reshape(*indices.shape, expert_outputs.shape[-1])
 
-    def _project_dynamic(
+    def _pack_dynamic_assignments(
+        self,
+        inputs: torch.Tensor,
+        indices: torch.Tensor,
+        positions: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Pack selected assignments into exact no-drop per-expert slots.
+
+        Every expert owns ``tokens`` slots, a strict upper bound because a
+        top-k router selects an expert at most once per token.  The sparse
+        bitmap activates only blocks containing real assignments.  This fixes
+        the original token-block schedule where top-8 routing activated almost
+        every expert in every 32-token tile and effectively became dense.
+        """
+
+        tokens = int(inputs.shape[0])
+        expert_slots = dynamic_pack_expert_assignments(
+            inputs, indices, positions, self.expert_count
+        )
+        block_sparsity = packed_expert_block_sparsity(
+            indices,
+            positions,
+            expert_count=self.expert_count,
+            slot_count=tokens,
+            dtype=inputs.dtype,
+        )
+        return expert_slots, block_sparsity
+
+    def _project_dynamic_selected(
         self,
         role: str,
         inputs: torch.Tensor,
-        block_sparsity: torch.Tensor,
         indices: torch.Tensor,
-        *,
-        shared_input: bool,
+        positions: torch.Tensor,
     ) -> torch.Tensor:
-        """Run one selected-only projection with a sparse frozen base.
+        """Execute selected expert blocks and restore assignment order."""
 
-        The TT sparse-matmul kernel is valuable for the large frozen expert
-        projection, where it avoids replicating an expert matrix for every
-        routed assignment.  It is deliberately *not* used for the rank-width
-        LoRA A/B products: Blackhole's current sparse kernel does not admit
-        those very narrow output geometries reliably (notably N=32), while the
-        ordinary selected-adapter path is both bounded and exact.  Adapter
-        selection therefore remains differentiable and assignment-local, and
-        only its small result is scattered back into the expert-major output.
-        """
-
-        project = (
-            dynamic_shared_input_expert_linear
-            if shared_input else dynamic_expert_input_linear
+        packed_inputs, block_sparsity = self._pack_dynamic_assignments(
+            inputs, indices, positions
         )
-        base = project(
-            inputs, self.routed_weights[role], block_sparsity, indices
+        expert_output = dynamic_expert_input_linear(
+            packed_inputs,
+            self.routed_weights[role],
+            block_sparsity,
+            indices,
         )
-
-        tokens, top_k = indices.shape
-        if shared_input:
-            selected_inputs = inputs
-        else:
-            token_ids = torch.arange(
-                tokens, dtype=indices.dtype, device=indices.device
-            ).unsqueeze(1)
-            selected_inputs = inputs[token_ids, indices]
+        base = dynamic_restore_expert_assignments(
+            expert_output, indices, positions
+        )
         low = _expert_linear(
-            selected_inputs, self._select(self.routed_lora_A[role], indices)
+            inputs, self._select(self.routed_lora_A[role], indices)
         )
-        selected_delta = _expert_linear(
+        delta = _expert_linear(
             low, self._select(self.routed_lora_B[role], indices)
         ) * self.scaling
-
-        expert_ids = torch.arange(
-            self.expert_count, dtype=indices.dtype, device=indices.device
-        )
-        selected_to_expert = (
-            indices.unsqueeze(-1)
-            == expert_ids.reshape(1, 1, self.expert_count)
-        ).to(selected_delta.dtype)
-        expert_delta = (
-            selected_delta.unsqueeze(2)
-            * selected_to_expert.unsqueeze(-1)
-        ).sum(dim=1)
-        return base + expert_delta
+        return base + delta
 
     def _routed_experts_dynamic(
         self,
         inputs: torch.Tensor,
         indices: torch.Tensor,
+        positions: torch.Tensor,
     ) -> torch.Tensor:
-        """No-capacity block-sparse expert execution on the TT device.
+        """Capacity-free selected-block expert execution on the TT device."""
 
-        Routing chooses active 32-token/expert blocks at runtime.  Frozen
-        expert matrices stay expert-major and are never gathered per routed
-        assignment.  Trainable LoRA matrices use the exact selected-adapter
-        path because their narrow rank geometry is not a safe sparse-kernel
-        shape; only small adapter tensors/activations participate there.
-        """
-
-        exact, block_sparsity = expert_block_sparsity(
-            indices,
-            expert_count=self.expert_count,
-            dtype=inputs.dtype,
-        )
         selected_inputs = inputs.unsqueeze(1).expand(
             -1, indices.shape[1], -1
         )
-        if "gate_up" in self.routed_weights:
-            gate, up = self._project_dynamic(
-                "gate_up", selected_inputs, block_sparsity, indices,
-                shared_input=True,
+        if self.routed_layout == "fused_swiglu":
+            gate, up = self._project_dynamic_selected(
+                "gate_up", selected_inputs, indices, positions
             ).chunk(2, dim=-1)
             hidden = _differentiable_silu(gate) * up
-        elif "gate" in self.routed_weights:
-            gate = self._project_dynamic(
-                "gate", selected_inputs, block_sparsity, indices,
-                shared_input=True,
+        elif self.routed_layout == "separate_swiglu":
+            gate = self._project_dynamic_selected(
+                "gate", selected_inputs, indices, positions
             )
-            up = self._project_dynamic(
-                "up", selected_inputs, block_sparsity, indices,
-                shared_input=True,
+            up = self._project_dynamic_selected(
+                "up", selected_inputs, indices, positions
             )
             hidden = _differentiable_silu(gate) * up
         else:
-            hidden = F.gelu(
-                self._project_dynamic(
-                    "up", selected_inputs, block_sparsity, indices,
-                    shared_input=True,
-                )
-            )
-        # sparse_matmul skips inactive blocks, while this exact token mask
-        # removes the unused lanes in active blocks before the down projection.
-        hidden = hidden * exact.to(hidden.dtype).unsqueeze(-1)
-        output = self._project_dynamic(
-            "down", hidden, block_sparsity, indices, shared_input=False
+            hidden = F.gelu(self._project_dynamic_selected(
+                "up", selected_inputs, indices, positions
+            ))
+        return self._project_dynamic_selected(
+            "down", hidden, indices, positions
         )
-        token_ids = torch.arange(
-            inputs.shape[0], dtype=indices.dtype, device=indices.device
-        ).unsqueeze(1)
-        return output[token_ids, indices]
 
     def _group_limited_logits(self, logits: torch.Tensor) -> torch.Tensor:
         if self.expert_group_count is None:
@@ -809,9 +797,10 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         gates = self._routing_weights(
             router_logits, selected_logits, selected_indices
         ).to(flat.dtype)
+        use_dynamic = self.backend == "dynamic" and self.capacity_factor is None
         positions = (
             self._routing_positions(selected_indices)
-            if self.capacity_factor is not None else None
+            if self.capacity_factor is not None or use_dynamic else None
         )
         capacity = self._capacity_mask(selected_indices, positions)
         if self.overflow_policy != "none":
@@ -819,7 +808,6 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         self.last_route_indices = selected_indices.detach()
         self.last_router_logits = router_logits
         selected_inputs = flat.unsqueeze(1).expand(-1, self.top_k, -1)
-        use_dynamic = self.backend == "dynamic" and self.capacity_factor is None
         use_bucketed = (
             self.backend == "sparse"
             and self.capacity_factor is not None
@@ -834,9 +822,15 @@ class GenericDeviceSparseMoELoRA(nn.Module):
             )
             if support_error is not None:
                 raise RuntimeError(support_error)
-            routed = self._routed_experts_dynamic(flat, selected_indices)
+            assert positions is not None
+            routed = self._routed_experts_dynamic(
+                flat, selected_indices, positions
+            )
             self.last_execution_schedule = "dynamic_native_expert_bucketed"
-            self.last_packed_slot_count = int(selected_indices.numel())
+            self.last_selected_assignment_count = int(selected_indices.numel())
+            self.last_packed_slot_count = (
+                int(flat.shape[0]) * self.expert_count
+            )
         elif use_bucketed:
             expert_capacity = self._expert_capacity(
                 int(selected_indices.numel())
@@ -851,12 +845,14 @@ class GenericDeviceSparseMoELoRA(nn.Module):
             self.last_packed_slot_count = (
                 self.expert_count * expert_capacity
             )
+            self.last_selected_assignment_count = int(selected_indices.numel())
         else:
             routed = self._routed_experts(
                 selected_inputs, selected_indices
             )
             self.last_execution_schedule = "assignment_weight_gather"
             self.last_packed_slot_count = None
+            self.last_selected_assignment_count = int(selected_indices.numel())
         combined = (routed * gates.unsqueeze(-1)).sum(dim=1)
         if self.overflow_policy == "residual":
             dropped = (~capacity).all(dim=1).to(flat.dtype).unsqueeze(-1)
@@ -1229,6 +1225,11 @@ def install_sparse_moe(
         _register_router_output_capture(model)
     first = moe_layers[0].moe
     assert first is not None
+    capacity_factor = (
+        architecture.moe.expert_capacity_factor
+        if architecture is not None and architecture.moe is not None
+        else None
+    )
     return SparseMoEInstallReport(
         backend=backend,
         layers=len(moe_layers),
@@ -1237,7 +1238,29 @@ def install_sparse_moe(
         rank=rank,
         host_token_routing_loop=False,
         evaluates_all_experts=False,
+        assignment_capacity=(
+            "exact_no_drop_per_expert_token_bound"
+            if backend == "dynamic" and capacity_factor is None
+            else "explicit_model_capacity"
+            if capacity_factor is not None
+            else "selected_assignment_fallback"
+        ),
+        assignment_packing=(
+            "device_expert_positions_without_host_routing"
+            if backend == "dynamic"
+            else "device_tensor_routing"
+        ),
+        expert_execution_granularity=(
+            "selected_32_row_expert_blocks"
+            if backend == "dynamic"
+            else "selected_expert_assignments"
+        ),
         deterministic_contract=(
+            "fp32_router; deterministic no-drop per-expert position packing; "
+            "selected 32-row expert blocks only; lower expert id wins ties; "
+            "canonical routed/shared expert math; no host token loop"
+            if backend == "dynamic"
+            else
             "fp32_router; deterministic selected-only device routing; lower "
             "expert id wins ties; token-major selected-rank dispatch; "
             "canonical routed/shared expert math; no host token loop"

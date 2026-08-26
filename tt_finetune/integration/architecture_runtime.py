@@ -1,4 +1,4 @@
-"""Apply a architecture architecture plan to an instantiated PEFT model."""
+"""Apply an architecture plan to an instantiated PEFT model."""
 
 from __future__ import annotations
 
@@ -142,6 +142,11 @@ def plan_and_install_architecture(
     if descriptor.moe is not None:
         moe_selection = plan.selection("moe")
         selected_moe_backend = (
+            "dynamic"
+            if requested_moe_backend == "auto"
+            and plan.moe_execution_schedule
+            == "dynamic_native_expert_bucketed"
+            else
             "sparse"
             if requested_moe_backend == "auto"
             and moe_selection.implementation == "device_sparse_selected_experts"

@@ -367,6 +367,9 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
                 requested_moe_backend=str(getattr(
                     config, "tt_moe_backend", "auto"
                 )),
+                attention_query_chunk_tokens=int(getattr(
+                    config, "tt_attention_query_chunk_tokens", 128
+                )),
             )
             model._tt_architecture_report = architecture_report
             if initial_adapter_path:

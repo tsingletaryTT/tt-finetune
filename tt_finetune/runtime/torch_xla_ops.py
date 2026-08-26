@@ -160,10 +160,13 @@ class TorchXlaTrainingOps:
         self.gradient_audit: dict[str, Any] | None = None
         self.training_dropout = training_dropout
         self.phase_seconds: dict[str, list[float]] = {}
-        self.trainable_parameters = [
-            parameter
-            for parameter in model.parameters()
+        self.trainable_named_parameters = [
+            (name, parameter)
+            for name, parameter in model.named_parameters()
             if parameter.requires_grad
+        ]
+        self.trainable_parameters = [
+            parameter for _name, parameter in self.trainable_named_parameters
         ]
         self.host_master_parameters = host_master_parameters
         if (
@@ -343,6 +346,91 @@ class TorchXlaTrainingOps:
             torch_xla.sync(wait=True)
         self._record_phase("post_backward_sync", started)
 
+    def audit_gradient_state(self) -> None:
+        """Capture the first accumulated pre-clipping gradient authority."""
+
+        if not self.audit_gradients or self.gradient_audit is not None:
+            return
+        named_gradients = [
+            (name, parameter.grad.detach())
+            for name, parameter in self.trainable_named_parameters
+            if parameter.grad is not None
+        ]
+        gradients = [gradient for _name, gradient in named_gradients]
+        # Do not transfer full XLA gradient buffers for this audit.  Large
+        # strided/autograd views can be materialized through a different
+        # layout on the host and have produced false all-zero/Inf reports even
+        # while the packed optimizer moments remain finite.  Reduce the facts
+        # on device and transfer only scalar authorities.
+        finite_scalars = [
+            self.torch.isfinite(gradient).all() for gradient in gradients
+        ]
+        nonzero_scalars = [
+            gradient.count_nonzero() > 0 for gradient in gradients
+        ]
+        finite_max_scalars = [
+            self.torch.where(
+                self.torch.isfinite(gradient),
+                gradient.abs(),
+                self.torch.zeros((), dtype=gradient.dtype, device=gradient.device),
+            ).max()
+            for gradient in gradients
+        ]
+        finite_sum_scalars = [
+            self.torch.where(
+                self.torch.isfinite(gradient),
+                gradient.abs(),
+                self.torch.zeros((), dtype=gradient.dtype, device=gradient.device),
+            ).sum()
+            for gradient in gradients
+        ]
+        scalar_authorities = (
+            finite_scalars
+            + nonzero_scalars
+            + finite_max_scalars
+            + finite_sum_scalars
+        )
+        if scalar_authorities and self.device_manager.config.use_tt:
+            import torch_xla
+
+            torch_xla._XLAC._xla_sync_multi(
+                scalar_authorities,
+                devices=[],
+                wait=True,
+                sync_xla_data=True,
+            )
+        finite = [bool(value.cpu().item()) for value in finite_scalars]
+        nonzero = [bool(value.cpu().item()) for value in nonzero_scalars]
+        maxima = [float(value.cpu().item()) for value in finite_max_scalars]
+        sums = [float(value.cpu().item()) for value in finite_sum_scalars]
+        nonfinite_names = [
+            name
+            for (name, _gradient), is_finite in zip(named_gradients, finite)
+            if not is_finite
+        ]
+        zero_names = [
+            name for (name, _gradient), has_values in zip(named_gradients, nonzero)
+            if not has_values
+        ]
+        self.gradient_audit = {
+            "boundary": "accumulated_pre_clip",
+            "tensor_count": len(gradients),
+            "nonzero_tensor_count": sum(
+                nonzero
+            ),
+            "nonfinite_tensor_count": sum(
+                not value for value in finite
+            ),
+            "nonfinite_tensor_names": nonfinite_names,
+            "zero_tensor_count": len(zero_names),
+            "zero_tensor_names": zero_names,
+            "max_abs": max(
+                maxima,
+                default=0.0,
+            ),
+            "sum_abs": sum(sums),
+        }
+
     def clip_grad_norm(self, maximum: float) -> None:
         started = perf_counter()
         if (
@@ -409,26 +497,9 @@ class TorchXlaTrainingOps:
 
     def optimizer_step(self) -> None:
         started = perf_counter()
-        if self.audit_gradients and self.gradient_audit is None:
-            gradients = [
-                parameter.grad.detach().cpu()
-                for parameter in self.trainable_parameters
-                if parameter.grad is not None
-            ]
-            self.gradient_audit = {
-                "tensor_count": len(gradients),
-                "nonzero_tensor_count": sum(
-                    bool(gradient.count_nonzero().item())
-                    for gradient in gradients
-                ),
-                "max_abs": max(
-                    (float(gradient.abs().max()) for gradient in gradients),
-                    default=0.0,
-                ),
-                "sum_abs": sum(
-                    float(gradient.abs().sum()) for gradient in gradients
-                ),
-            }
+        # Fused-loop variants can skip the ordinary pre-optimizer boundary;
+        # keep the same audit contract as a safe fallback in that case.
+        self.audit_gradient_state()
         if self.host_master_parameters is not None:
             for device_parameter, master_parameter in zip(
                 self.trainable_parameters,

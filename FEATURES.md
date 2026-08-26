@@ -17,7 +17,8 @@
 - BF16 and qualified reduced frozen-weight memory modes
 - deterministic checkpoint/resume, including optimizer and data position
 - gradient accumulation, clipping, AdamW, logging, and checkpoint cadence
-- dense causal LMs and the documented sparse-MoE contract
+- dense causal LMs and the documented sparse-MoE contract, including
+  capacity-free device routing into selected 32-row expert blocks
 
 ## Data pipeline
 

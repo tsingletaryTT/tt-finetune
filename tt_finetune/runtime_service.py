@@ -13,7 +13,10 @@ import gc
 import json
 import os
 from pathlib import Path
+import signal
+import socket
 import socketserver
+import threading
 import time
 import traceback
 from typing import Any
@@ -145,8 +148,45 @@ class RuntimeState:
             self._write_info()
 
 
+def _client_connection_is_open(connection: socket.socket) -> bool:
+    """Return whether the request owner still holds its service connection."""
+
+    try:
+        pending = connection.recv(
+            1, socket.MSG_PEEK | socket.MSG_DONTWAIT
+        )
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    return bool(pending)
+
+
+def _watch_training_client(
+    connection: socket.socket,
+    stopped: threading.Event,
+    *,
+    interval_seconds: float = 0.5,
+) -> None:
+    """Terminate an orphaned service instead of continuing an ownerless job.
+
+    The service deliberately owns compiler state but not training state.  If
+    the client supervising a training request disappears, continuing to use
+    the card cannot produce a response and can block every subsequent user
+    request.  Process termination is the only generally safe cancellation
+    boundary available while PJRT execution is synchronous.
+    """
+
+    while not stopped.wait(interval_seconds):
+        if not _client_connection_is_open(connection):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 class RequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
+        lease_stopped: threading.Event | None = None
+        lease_watcher: threading.Thread | None = None
         try:
             request = json.loads(self.rfile.readline())
             action = request.get("action", "train")
@@ -154,7 +194,19 @@ class RequestHandler(socketserver.StreamRequestHandler):
             if action == "status":
                 response = {"status": "ready", **state.status()}
             elif action == "train":
-                response = state.run_job(request)
+                lease_stopped = threading.Event()
+                lease_watcher = threading.Thread(
+                    target=_watch_training_client,
+                    args=(self.connection, lease_stopped),
+                    name="tt-finetune-client-lease",
+                    daemon=True,
+                )
+                lease_watcher.start()
+                try:
+                    response = state.run_job(request)
+                finally:
+                    lease_stopped.set()
+                    lease_watcher.join(timeout=2.0)
             else:
                 raise ValueError(f"unsupported service action: {action!r}")
         except Exception as error:
