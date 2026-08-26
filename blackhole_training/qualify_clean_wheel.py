@@ -139,7 +139,10 @@ def _stop_idle_runtime(workspace: Path) -> bool:
         time.sleep(0.1)
     else:
         os.kill(pid, signal.SIGKILL)
-    (runtime_root / "runtime.sock").unlink(missing_ok=True)
+    socket_path = Path(
+        status.get("socket_path") or runtime_root / "runtime.sock"
+    )
+    socket_path.unlink(missing_ok=True)
     info_path.unlink(missing_ok=True)
     return True
 

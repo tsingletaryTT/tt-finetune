@@ -13,6 +13,7 @@ from blacksmith.tools.logging_manager import TrainingLogger
 from tt_finetune.backends.direct import (
     DirectBlackholeBackend,
     _native_runtime_failure_diagnostic,
+    _short_runtime_socket_path,
 )
 from tt_finetune.runtime_service import (
     _client_connection_is_open,
@@ -26,6 +27,19 @@ def _config():
         log_level="INFO",
         use_wandb=False,
     )
+
+
+def test_runtime_socket_path_is_independent_of_long_workspace(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path / "run"))
+    workspace = tmp_path / ("very-long-workspace-segment-" * 8)
+
+    socket_path = _short_runtime_socket_path(workspace)
+
+    assert len(os.fsencode(str(socket_path))) <= 107
+    assert workspace not in socket_path.parents
+    assert socket_path.parent.stat().st_mode & 0o777 == 0o700
 
 
 def test_repeated_job_logger_does_not_propagate_to_stale_root_stream():

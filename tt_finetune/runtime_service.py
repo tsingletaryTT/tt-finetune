@@ -61,9 +61,15 @@ def _load_job_config(request: dict[str, Any]):
 
 
 class RuntimeState:
-    def __init__(self, fingerprint: str, info_path: Path):
+    def __init__(
+        self,
+        fingerprint: str,
+        info_path: Path,
+        socket_path: Path,
+    ):
         self.fingerprint = fingerprint
         self.info_path = info_path
+        self.socket_path = socket_path
         self.started_at = time.time()
         self.jobs_started = 0
         self.jobs_completed = 0
@@ -74,8 +80,9 @@ class RuntimeState:
     def _write_info(self) -> None:
         self.info_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "pid": os.getpid(),
+            "socket_path": str(self.socket_path),
             "fingerprint": self.fingerprint,
             "started_at_unix": self.started_at,
             "jobs_started": self.jobs_started,
@@ -227,10 +234,14 @@ def main() -> None:
     arguments.socket.parent.mkdir(parents=True, exist_ok=True)
     arguments.info.parent.mkdir(parents=True, exist_ok=True)
     arguments.socket.unlink(missing_ok=True)
-    state = RuntimeState(arguments.fingerprint, arguments.info)
+    state = RuntimeState(
+        arguments.fingerprint,
+        arguments.info,
+        arguments.socket,
+    )
     with UnixRuntimeServer(str(arguments.socket), RequestHandler) as server:
         server.runtime_state = state  # type: ignore[attr-defined]
-        os.chmod(arguments.socket, 0o666)
+        os.chmod(arguments.socket, 0o600)
         server.serve_forever(poll_interval=0.25)
 
 

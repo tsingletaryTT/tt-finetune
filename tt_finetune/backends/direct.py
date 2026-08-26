@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import stat
 import statistics
 import subprocess
 import sys
@@ -23,6 +24,46 @@ from blackhole_training import TTTrainResult
 from .blackhole import BlackholeXlaBackend
 from ..config import IA3Config, LoRAConfig
 from ..errors import TTDependencyError, classify_runtime_error
+
+
+_UNIX_SOCKET_PATH_LIMIT = 107
+
+
+def _short_runtime_socket_path(workspace: Path) -> Path:
+    """Return a private, workspace-stable AF_UNIX path below Linux's limit.
+
+    The public workspace is intentionally allowed to live below an arbitrary
+    user-selected cache/home directory.  AF_UNIX does not share that freedom:
+    Linux limits ``sun_path`` to 108 bytes including its terminator.  Keep
+    durable service metadata in the workspace, but address the local service
+    through a short per-user runtime directory keyed by the resolved workspace.
+    """
+
+    uid = os.getuid()
+    identity = hashlib.sha256(
+        os.fsencode(str(workspace.expanduser().resolve()))
+    ).hexdigest()[:20]
+    candidates = []
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime:
+        candidates.append(Path(xdg_runtime) / "tt-finetune")
+    candidates.append(Path("/tmp") / f"tt-finetune-{uid}")
+    for root in candidates:
+        socket_path = root / f"rt-{identity}.sock"
+        if len(os.fsencode(str(socket_path))) > _UNIX_SOCKET_PATH_LIMIT:
+            continue
+        try:
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            metadata = root.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid:
+            continue
+        os.chmod(root, 0o700)
+        return socket_path
+    raise RuntimeError(
+        "no safe AF_UNIX path is short enough for the persistent TT runtime"
+    )
 
 
 def _percentile_local(values: tuple[float, ...], fraction: float) -> float:
@@ -174,6 +215,9 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         root.mkdir(parents=True, exist_ok=True)
         return root
 
+    def _persistent_socket_path(self) -> Path:
+        return _short_runtime_socket_path(self._engine.workspace)
+
     def _persistent_container_name(self) -> str:
         identity = hashlib.sha256(
             str(self._engine.workspace).encode("utf-8")
@@ -183,7 +227,12 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
     def _persistent_container_path(self, path: Path) -> str:
         return self._engine._to_container_path(path)
 
-    def _service_status(self, socket_path: Path) -> dict[str, Any] | None:
+    def _service_status(
+        self,
+        socket_path: Path,
+        *,
+        info_path: Path | None = None,
+    ) -> dict[str, Any] | None:
         if not socket_path.exists():
             return None
         try:
@@ -199,7 +248,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             # A synchronous train handler cannot answer status until the job
             # ends, so use its atomically published state instead of blocking
             # a second public API call indefinitely.
-            info_path = socket_path.parent / "runtime_info.json"
+            info_path = info_path or socket_path.parent / "runtime_info.json"
             try:
                 status = json.loads(info_path.read_text(encoding="utf-8"))
                 pid = int(status.get("pid") or 0)
@@ -221,10 +270,14 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         status: dict[str, Any] | None = None,
         *,
         expected_active_job: str | None = None,
+        info_path: Path | None = None,
     ) -> bool:
         """Release an idle service or the exact abandoned job we own."""
 
-        status = status or self._service_status(socket_path)
+        info_path = info_path or socket_path.parent / "runtime_info.json"
+        status = status or self._service_status(
+            socket_path, info_path=info_path
+        )
         if status is None:
             return False
         active_job = status.get("active_job")
@@ -251,7 +304,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         else:
             os.kill(pid, signal.SIGKILL)
         socket_path.unlink(missing_ok=True)
-        (socket_path.parent / "runtime_info.json").unlink(missing_ok=True)
+        info_path.unlink(missing_ok=True)
         return True
 
     def _cancel_owned_persistent_job(
@@ -261,28 +314,32 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
     ) -> bool:
         """Cancel only the package service still running this exact job."""
 
-        status = self._service_status(socket_path)
+        info_path = self._persistent_root() / "runtime_info.json"
+        status = self._service_status(socket_path, info_path=info_path)
         if status is None or status.get("active_job") != job_id:
             return False
         return self._stop_persistent_service(
             socket_path,
             status,
             expected_active_job=job_id,
+            info_path=info_path,
         )
 
     def _ensure_persistent_service(self) -> tuple[Path, dict[str, Any]]:
         root = self._persistent_root()
-        socket_path = root / "runtime.sock"
+        socket_path = self._persistent_socket_path()
         info_path = root / "runtime_info.json"
         fingerprint = self._direct_fingerprint()
-        status = self._service_status(socket_path)
+        status = self._service_status(socket_path, info_path=info_path)
         if (
             status is not None
             and status.get("fingerprint") == fingerprint
         ):
             return socket_path, status
         if status is not None:
-            self._stop_persistent_service(socket_path, status)
+            self._stop_persistent_service(
+                socket_path, status, info_path=info_path
+            )
         socket_path.unlink(missing_ok=True)
         info_path.unlink(missing_ok=True)
         log_path = root / "runtime_service.log"
@@ -311,7 +368,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         log.close()
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            status = self._service_status(socket_path)
+            status = self._service_status(socket_path, info_path=info_path)
             if status is not None:
                 return socket_path, status
             time.sleep(0.25)
@@ -588,8 +645,12 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             # first candidate fail with a misleading TLB/NOC admission error.
             # Release it before profiling; the selected plan is materialized
             # into a new service after the search completes.
-            socket_path = self._persistent_root() / "runtime.sock"
-            self._stop_persistent_service(socket_path)
+            runtime_root = self._persistent_root()
+            socket_path = self._persistent_socket_path()
+            self._stop_persistent_service(
+                socket_path,
+                info_path=runtime_root / "runtime_info.json",
+            )
 
         candidates = [
             execution_candidate_from_dict(item)
@@ -1948,8 +2009,10 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 # release an idle package service before spawning the worker;
                 # _stop_persistent_service deliberately refuses to terminate
                 # an unrelated active training job.
+                runtime_root = self._persistent_root()
                 self._stop_persistent_service(
-                    self._persistent_root() / "runtime.sock"
+                    self._persistent_socket_path(),
+                    info_path=runtime_root / "runtime_info.json",
                 )
                 memory_log_host = execution_output / "tt_metal_logs"
                 memory_log_container = f"{output}/tt_metal_logs"
