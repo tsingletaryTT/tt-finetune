@@ -247,6 +247,7 @@ class ResidentStackEngine:
             attention_scale=shape.attention_scale,
             rmsnorm_epsilon=shape.rmsnorm_epsilon,
             has_bias=shape.has_bias,
+            active_lora_roles=shape.active_lora_roles,
             o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
         )
         if canonical_exact_attention and not compact_forward:
@@ -332,6 +333,10 @@ class ResidentStackEngine:
             }
             if canonical_exact_attention else {}
         )
+        topology_forward_kwargs = (
+            {"active_lora_roles": shape.active_lora_roles}
+            if compact_forward else {}
+        )
         per_layer_forward = per_layer_forward_builder(
             sequence_length=shape.sequence_length,
             hidden_features=shape.hidden_features,
@@ -349,6 +354,7 @@ class ResidentStackEngine:
             hidden_page_base=0,
             publish_layer_output_at_page_zero=False,
             o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
+            **topology_forward_kwargs,
             **exact_forward_kwargs,
         )
         final_layer = shape.layers - 1

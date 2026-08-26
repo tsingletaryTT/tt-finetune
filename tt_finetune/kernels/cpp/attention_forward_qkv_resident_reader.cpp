@@ -34,6 +34,7 @@ constexpr uint32_t kOInputReady = 13;
 constexpr uint32_t kInvocationWriterCount = 14;
 constexpr uint32_t kInvocationDone = 15;
 constexpr bool kInputRMSNorm = @INPUT_RMSNORM@;
+constexpr bool kPrefixOnly = @PROJECTION_ROPE_PREFIX_ONLY@;
 constexpr bool kDedicatedORank = @DEDICATED_O_RANK@;
 constexpr bool kPostAttentionBlock = @POST_ATTENTION_BLOCK@;
 constexpr uint32_t kPostDiagnosticStage = @POST_DIAGNOSTIC_STAGE@;
@@ -474,7 +475,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
 
     // In the aliased layer owner, O reuses Q/K/V CB identities. Wait until
     // compute has consumed every Q/K/V reader tile before reserving O input.
-    if constexpr (@ALIASED_PROJECTION_CBS@) {
+    if constexpr (@ALIASED_PROJECTION_CBS@ && !kPrefixOnly) {
         CircularBuffer qkv_consumed(30), qkv_reuse_ack(31);
         qkv_consumed.wait_front(1);
         qkv_consumed.pop_front(1);
@@ -499,6 +500,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
         qkv_reuse_ack.push_back(1);
     }
 
+    if constexpr (!kPrefixOnly) {
     // Reserve the complete post-attention row before any O writer targets it.
     // All 50 reader RISCs join the readiness count so no late core can clear a
     // freshly published generation.  Only the four sequence-row owners hold
@@ -680,6 +682,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
                 post_gamma_ready.push_back(1);
             }
         }
+    }
     }
     // A later resident owner reuses these fixed L1 semaphore/mailbox
     // addresses.  Keep this reader RISC alive until every writer in both

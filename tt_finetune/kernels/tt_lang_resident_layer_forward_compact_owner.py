@@ -380,6 +380,9 @@ def build_tt_lang_resident_layer_forward_compact_owner(
     lora_scale: float,
     attention_scale: float,
     has_bias: bool,
+    active_lora_roles: tuple[str, ...] = (
+        "q", "k", "v", "o", "gate", "up", "down",
+    ),
     input_rmsnorm_epsilon: float,
     post_attention_rmsnorm_epsilon: float,
     hidden_page_base: int = 0,
@@ -398,6 +401,10 @@ def build_tt_lang_resident_layer_forward_compact_owner(
 
     if input_rmsnorm_epsilon != post_attention_rmsnorm_epsilon:
         raise ValueError("compact layer currently requires equal RMS epsilons")
+    canonical_roles = {"q", "k", "v", "o", "gate", "up", "down"}
+    active_lora_roles = tuple(dict.fromkeys(active_lora_roles))
+    if not active_lora_roles or not set(active_lora_roles) <= canonical_roles:
+        raise ValueError("active LoRA roles must be a non-empty canonical subset")
     attention = build_tt_lang_resident_attention_block_forward_owner(
         sequence_length=sequence_length,
         hidden_features=hidden_features,
@@ -410,6 +417,7 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         attention_scale=attention_scale,
         rmsnorm_epsilon=input_rmsnorm_epsilon,
         has_bias=has_bias,
+        active_lora_roles=active_lora_roles,
         grouped_qkv_lora=bool(exact_attention_tail and has_bias),
         o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
         canonical_native_o_path=canonical_native_o_path,
@@ -964,6 +972,7 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         f"{sequence_length}x{hidden_features}.i{intermediate_features}."
         f"q{query_heads}.k{kv_heads}.d{head_dim}.r{physical_rank}."
         f"bias{int(has_bias)}.hidden{hidden_page_base}."
+        f"targets{'-'.join(active_lora_roles)}."
         f"page0{int(publish_layer_output_at_page_zero)}."
         f"extres{int(debug_external_mlp_residual)}."
         f"exactattn{int(exact_attention_tail)}."

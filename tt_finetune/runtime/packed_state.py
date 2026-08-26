@@ -52,6 +52,12 @@ class ResidentModelShape:
     attention_scale: float
     rmsnorm_epsilon: float
     has_bias: bool
+    # Canonical semantic projections that own real trainable LoRA state.
+    # The packed ABI keeps fixed physical slots for all seven roles, but the
+    # execution compiler must be able to omit arithmetic for zero/inactive
+    # slots.  Keeping the topology beside the geometry makes that decision
+    # semantic and model-name independent.
+    active_lora_roles: tuple[str, ...] = _PROJECTIONS
 
 
 @dataclass(frozen=True)
@@ -603,6 +609,7 @@ def pack_transformer_stack(
         attention_scale=float(first.self_attn.scaling),
         rmsnorm_epsilon=next(iter(epsilons)),
         has_bias=next(iter(bias_contracts)),
+        active_lora_roles=next(iter(active_role_signatures)),
     )
     plan = plan_multi_layer_optimizer_gradient_arena(
         layer_count=len(layers),
