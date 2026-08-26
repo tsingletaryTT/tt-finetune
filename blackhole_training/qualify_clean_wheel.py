@@ -198,7 +198,7 @@ def main() -> int:
         environment.pop(name, None)
     environment.update(
         {
-            # The public workspace default is ~/.cache/tt-finetune/workspace.
+            # The public training state defaults below ~/.cache/tt-finetune.
             # An isolated HOME proves that the clean wheel neither observes
             # nor reuses a development runtime, semantic plan, or executable.
             "HOME": str(clean_home),
