@@ -63,13 +63,17 @@ trainer.train()
 
 ## Install
 
-Install the supplied platform wheel. Its dependency metadata installs the
-compatible host-side data tools:
+The current binary release is `v0.2.0` for CPython 3.12 on Linux x86-64. Install
+the platform wheel directly from the GitHub Release:
 
 ```bash
-python -m pip install ./dist/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
-tt-finetune doctor
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.0/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
+tt-finetune doctor --smoke
 ```
+
+Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/tag/v0.2.0>
 
 The platform wheel bundles the compatible TT-XLA/PJRT plugin, TTNN, TT-Metal
 user-space libraries, compiler/runtime libraries, Python bindings, custom ops,
@@ -173,11 +177,10 @@ Prefix/prompt tuning and data-dependent simultaneous adapter routing fail
 closed because they change the resident attention or graph-state ABI. They are
 not approximated by checkpoint-specific wrappers.
 
-See the [installation guide](docs/INSTALL.md), [supported
-configurations](docs/SUPPORTED.md), [known limitations](docs/LIMITATIONS.md),
-[benchmarks](docs/BENCHMARKS.md), and [roadmap](docs/PRODUCT_ROADMAP.md).
-Runnable examples include
+See the [installation guide](INSTALL.md), [supported configurations](SUPPORTED.md),
+[known limitations](LIMITATIONS.md), [benchmarks](BENCHMARKS.md), and
+[roadmap](ROADMAP.md). Runnable examples include
 [minimal LoRA](examples/minimal_lora.py),
-[dataset/checkpoint/resume](examples/dataset_and_resume.py), and
+[dataset/checkpoint/resume](examples/dataset_and_resume.py),
 [standard PEFT reload](examples/adapter_reload.py), and
 [rsLoRA/LoRA+/DoRA/IA3 configuration](examples/adapter_methods.py).
