@@ -1,17 +1,16 @@
 # Installation
 
 `tt-finetune` targets a single Tenstorrent Blackhole P150a on 64-bit Linux.
-Install the supplied wheel into a clean Python virtual environment:
+Install the current platform wheel into a clean CPython 3.12 virtual environment:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install ./tt_finetune-0.2.0-py3-none-any.whl
-tt-finetune doctor
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.0/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
+tt-finetune doctor --smoke
 ```
 
-The final wheel filename may include a more specific platform tag. Use the
-filename present in the release `dist/` directory.
+Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/tag/v0.2.0>
 
 The host must provide the Tenstorrent kernel driver, access to
 `/dev/tenstorrent`, compatible firmware, and the configured hugepage mount.
@@ -24,13 +23,18 @@ compatibility lock. The project is not claimed to be published on PyPI.
 
 ## Verify the installation
 
-From a directory outside the source checkout:
+After installation, run from any directory outside the source checkout:
 
 ```bash
 python -c 'import tt_finetune; print(tt_finetune.__version__)'
-tt-finetune doctor
-python quickstart.py
+tt-finetune doctor --smoke
+```
+
+If you cloned the repository for the examples, you can then run:
+
+```bash
+python examples/quickstart.py
 ```
 
 No `PYTHONPATH`, source checkout, or repository-relative working directory is
-required by the Python product layer.
+required by the installed Python package.
