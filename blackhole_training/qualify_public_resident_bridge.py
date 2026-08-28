@@ -35,6 +35,11 @@ def main() -> int:
     parser.add_argument("--warmups", type=int, default=4)
     parser.add_argument("--logging-steps", type=int, default=1000)
     parser.add_argument(
+        "--profile-phases",
+        action="store_true",
+        help="capture synchronized public resident phase boundaries",
+    )
+    parser.add_argument(
         "--sequence-buckets",
         type=int,
         nargs="+",
@@ -89,6 +94,7 @@ def main() -> int:
         runtime_mode="isolated",
         memory_mode="bf16",
         audit_training_state=args.audit,
+        profile_product_boundaries=args.profile_phases,
         auto_smoke=False,
         auto_tune=False,
         seed=3407,
