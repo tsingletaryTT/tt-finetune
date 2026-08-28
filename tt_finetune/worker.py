@@ -734,6 +734,9 @@ def _run_public_resident_training(
         plan=architecture_report.plan,
         decoder_path=architecture_report.weight_map.decoder_path,
         device=device_manager.device,
+        runtime_source_hash=os.environ.get(
+            "TT_FINETUNE_RUNTIME_SOURCE_HASH"
+        ),
     )
     metrics["architecture"]["executor_backend"] = "resident_exact"
     metrics["architecture"]["executor_fallback_reason"] = None

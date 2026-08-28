@@ -162,8 +162,13 @@ def test_runtime_fingerprint_tracks_measured_model_installation_sources():
         "tt_finetune/integration/streamed_attention.py",
         "tt_finetune/integration/sparse_moe.py",
         "tt_finetune/kernels/dynamic_sparse_expert.py",
+        "tt_finetune/kernels/tt_lang_multi_layer_gradient_arena_schedule.py",
+        "tt_finetune/kernels/cpp/attention_forward_prefix_compute.cpp",
+        "tt_finetune/runtime/resident_engine.py",
     ):
         assert path in source
+    assert "tt_finetune/_resident_bundles" in source
+    assert "base.rglob" in source
 
 
 def _partition_request(*, memory_mode, estimated_bytes, sequence=32, moe=None):
@@ -261,3 +266,55 @@ def test_cache_miss_executes_admitted_static_geometry_plan(tmp_path):
     assert "--auto-split-after-forward" not in (
         backend._selected_worker_arguments()
     )
+
+
+def test_qualified_resident_train_compiles_one_deterministic_plan(tmp_path):
+    """Normal resident training never resurrects a measured candidate ABI."""
+
+    candidate = _candidate(candidate_id="irrelevant-measured-candidate")
+    automatic = {
+        "request_contract": {"geometry": "smol-r8-b1-s128"},
+        "selected": candidate.to_dict(),
+    }
+    backend = object.__new__(DirectBlackholeBackend)
+    backend.args = SimpleNamespace(auto_tune=False)
+    backend._selected_execution_candidate = candidate
+    backend._memory_support = lambda: SimpleNamespace(
+        automatic_plan=automatic,
+        execution_path="resident_exact",
+        rank=8,
+        batch_size=1,
+        sequence_length=128,
+    )
+    backend._direct_fingerprint = lambda: "resident-source-hash"
+    backend._execution_profile_contract = lambda _plan: {
+        "geometry": "smol-r8-b1-s128",
+        "compiler_hash": "compiler",
+        "runtime_hash": "resident-source-hash",
+        "source_hash": "resident-source-hash",
+    }
+
+    profile = backend._autotune(
+        report={
+            "architecture_descriptor": {
+                "semantic_fingerprint": "smol-semantic-fingerprint"
+            }
+        },
+        resolved=tmp_path / "resolved.yaml",
+        pipeline=SimpleNamespace(generated_dir=tmp_path / "generated"),
+    )
+
+    assert profile is not None
+    assert profile["selection_status"] == "deterministic_compiled"
+    assert profile["cache_status"] == "not_consulted"
+    assert profile["measurements"] == []
+    assert profile["selected"]["execution_backend"] == "resident_exact"
+    assert profile["selected"]["runtime_source_hash"] == (
+        "resident-source-hash"
+    )
+    assert profile["qualification"]["online_candidate_search"] is False
+    assert (
+        profile["qualification"]["measured_profile_cache_consulted"]
+        is False
+    )
+    assert backend._selected_execution_candidate is None

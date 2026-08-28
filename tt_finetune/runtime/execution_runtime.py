@@ -9,6 +9,8 @@ plan without introducing a model-name switch or changing frozen resident runtime
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,10 @@ class ResidentBuildReport:
     contract: str
     source_bundle: str
     descriptor_bundle: str
+    source_bundle_sha256: str
+    descriptor_bundle_sha256: str
+    runtime_source_hash: str
+    physical_plan_fingerprint: str
     public_custom_calls_per_step: int
     physical_programs_per_step: int
     batch_size: int
@@ -181,6 +187,9 @@ class ResidentCausalLMExecutor:
         engine: ResidentStackEngine,
         model: nn.Module,
         packing_audit: dict[str, Any],
+        source_bundle_sha256: str,
+        descriptor_bundle_sha256: str,
+        runtime_source_hash: str,
     ) -> None:
         self.plan = plan
         self.qualification = qualification
@@ -188,11 +197,34 @@ class ResidentCausalLMExecutor:
         self.edges = edges
         self.engine = engine
         self.model = model
+        physical_document = {
+            "schema": "tt-finetune-physical-plan-v1",
+            "semantic_fingerprint": plan.architecture.semantic_fingerprint,
+            "rank": plan.rank,
+            "batch_size": plan.batch_size,
+            "sequence_length": plan.sequence_length,
+            "targets": [vars(item) for item in plan.lora_targets],
+            "contract": qualification.contract,
+            "source_bundle_sha256": source_bundle_sha256,
+            "descriptor_bundle_sha256": descriptor_bundle_sha256,
+            "runtime_source_hash": runtime_source_hash,
+            "public_custom_calls_per_step": engine.public_custom_calls_per_step,
+            "physical_programs_per_step": engine.physical_programs_per_step,
+        }
+        self.physical_plan_fingerprint = hashlib.sha256(
+            json.dumps(
+                physical_document, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")
+        ).hexdigest()[:24]
         self.report = ResidentBuildReport(
             semantic_fingerprint=plan.architecture.semantic_fingerprint,
             contract=qualification.contract,
             source_bundle=qualification.source_bundle,
             descriptor_bundle=qualification.descriptor_bundle,
+            source_bundle_sha256=source_bundle_sha256,
+            descriptor_bundle_sha256=descriptor_bundle_sha256,
+            runtime_source_hash=runtime_source_hash,
+            physical_plan_fingerprint=self.physical_plan_fingerprint,
             public_custom_calls_per_step=engine.public_custom_calls_per_step,
             physical_programs_per_step=engine.physical_programs_per_step,
             batch_size=plan.batch_size,
@@ -218,6 +250,7 @@ class ResidentCausalLMExecutor:
             "rank": self.plan.rank,
             "batch_size": self.plan.batch_size,
             "sequence_length": self.plan.sequence_length,
+            "physical_plan_fingerprint": self.physical_plan_fingerprint,
             "optimizer_state": self.engine.optimizer_state.detach().cpu(),
         }
 
@@ -237,6 +270,15 @@ class ResidentCausalLMExecutor:
             for name, value in expected.items()
             if state.get(name) != value
         }
+        checkpoint_fingerprint = state.get("physical_plan_fingerprint")
+        if (
+            checkpoint_fingerprint is not None
+            and checkpoint_fingerprint != self.physical_plan_fingerprint
+        ):
+            differing["physical_plan_fingerprint"] = (
+                checkpoint_fingerprint,
+                self.physical_plan_fingerprint,
+            )
         if differing:
             raise ValueError(
                 "resident checkpoint geometry differs from the executable: "
@@ -296,6 +338,20 @@ def _qualified_bundle(root: Path, relative: str) -> Path:
     return development
 
 
+def _bundle_sha256(path: Path) -> str:
+    """Hash one frozen execution bundle independent of its install path."""
+
+    digest = hashlib.sha256()
+    files = sorted(item for item in path.rglob("*") if item.is_file())
+    if not files:
+        raise FileNotFoundError(f"resident execution bundle is empty: {path}")
+    for item in files:
+        digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item.read_bytes())
+    return digest.hexdigest()
+
+
 def _rotary_owner(model: nn.Module, decoder_path: str) -> nn.Module:
     decoder_parent = decoder_path.rsplit(".", 1)[0]
     decoder = model.get_submodule(decoder_parent)
@@ -322,6 +378,7 @@ def build_resident_executor(
     decoder_path: str,
     device: torch.device,
     project_root: str | Path | None = None,
+    runtime_source_hash: str | None = None,
 ) -> ResidentCausalLMExecutor:
     """Build the fastest qualified full-stack executor selected by ``plan``.
 
@@ -347,6 +404,9 @@ def build_resident_executor(
             raise FileNotFoundError(
                 f"qualified resident {kind} bundle is missing: {path}"
             )
+    source_bundle_sha256 = _bundle_sha256(source)
+    descriptor_bundle_sha256 = _bundle_sha256(descriptor)
+    runtime_source_hash = str(runtime_source_hash or "unreported")
 
     if next(model.parameters()).device.type != "cpu":
         raise ValueError("resident executor must pack the model before device transfer")
@@ -424,6 +484,9 @@ def build_resident_executor(
         engine=engine,
         model=model,
         packing_audit=packing_audit,
+        source_bundle_sha256=source_bundle_sha256,
+        descriptor_bundle_sha256=descriptor_bundle_sha256,
+        runtime_source_hash=runtime_source_hash,
     )
 
 

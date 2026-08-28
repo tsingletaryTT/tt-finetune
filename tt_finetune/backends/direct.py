@@ -348,6 +348,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             "PJRT_DEVICE": "TT",
             "XLA_STABLEHLO_COMPILE": "1",
             "WANDB_MODE": "disabled",
+            "TT_FINETUNE_RUNTIME_SOURCE_HASH": fingerprint,
         })
         command = [
             sys.executable, "-m", "tt_finetune.runtime_service",
@@ -394,6 +395,15 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
 
     def _direct_fingerprint(self) -> str:
         root = Path(__file__).resolve().parents[2]
+        engine_fingerprint = self._engine._engine_fingerprint()
+        cache_identity = (
+            engine_fingerprint,
+            str(root.resolve()),
+            str(self._engine.workspace.resolve()),
+        )
+        cached = getattr(self, "_direct_fingerprint_cached", None)
+        if cached is not None and cached[0] == cache_identity:
+            return cached[1]
         paths = (
             "tt_finetune/runtime/loop.py",
             "tt_finetune/runtime/torch_xla_ops.py",
@@ -426,11 +436,60 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             "tt_finetune/kernels/native_grouped_lora_autograd.py",
             "tt_finetune/kernels/native_full_attention_autograd.py",
             "tt_finetune/kernels/tt_lang_output_attention_resident_backward.py",
+            # Resident execution is assembled from generated TT-Metal sources.
+            # These files must participate explicitly even when a measured
+            # planner candidate and its semantic geometry are unchanged.
+            "tt_finetune/kernels/tt_lang_multi_layer_gradient_arena_schedule.py",
+            "tt_finetune/kernels/tt_lang_resident_layer_forward_compact_owner.py",
+            "tt_finetune/kernels/tt_lang_resident_attention_forward_owner.py",
+            "tt_finetune/kernels/tt_lang_resident_attention_block_forward_owner.py",
+            "tt_finetune/kernels/tt_lang_attention_forward_qkv_resident.py",
+            "tt_finetune/kernels/tt_lang_attention_forward_resident.py",
+            "tt_finetune/kernels/cpp/attention_forward_prefix_compute.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_core_compute.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_handoff_resident_reader.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_resident_reader.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_resident_writer.cpp",
+            "tt_finetune/runtime/resident_engine.py",
+            "tt_finetune/runtime/resident_training_ops.py",
+            "tt_finetune/runtime/execution_runtime.py",
         )
-        digest = hashlib.sha256(
-            self._engine._engine_fingerprint().encode("utf-8")
-        )
-        for relative in paths:
+        # The literal list above documents the most sensitive ABI boundary and
+        # keeps compatibility tests readable.  The recursive inventory is the
+        # actual safety net: adding a new resident kernel must invalidate the
+        # compile/profile cache without somebody remembering to edit a second
+        # allowlist.  Only source and frozen execution artifacts participate;
+        # interpreter caches and generated qualification output do not.
+        tracked = set(paths)
+        tree_suffixes = {
+            "tt_finetune/runtime": {".py"},
+            "tt_finetune/integration": {".py"},
+            "tt_finetune/kernels": {".py", ".cpp", ".h", ".hpp"},
+            "tt_finetune/_resident_bundles": {
+                ".json", ".cpp", ".h", ".hpp"
+            },
+        }
+        for relative_root, suffixes in tree_suffixes.items():
+            base = root / relative_root
+            if not base.is_dir():
+                base = self._engine.workspace / relative_root
+            if not base.is_dir():
+                raise TTDependencyError(
+                    "Cannot fingerprint required direct-runtime source tree: "
+                    f"{relative_root}"
+                )
+            for path in base.rglob("*"):
+                if (
+                    path.is_file()
+                    and path.suffix in suffixes
+                    and "__pycache__" not in path.parts
+                ):
+                    tracked.add(
+                        f"{relative_root}/{path.relative_to(base).as_posix()}"
+                    )
+
+        digest = hashlib.sha256(engine_fingerprint.encode("utf-8"))
+        for relative in sorted(tracked):
             path = root / relative
             if not path.is_file():
                 path = self._engine.workspace / relative
@@ -442,7 +501,9 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 )
             digest.update(relative.encode("utf-8"))
             digest.update(path.read_bytes())
-        return digest.hexdigest()[:20]
+        value = digest.hexdigest()[:20]
+        self._direct_fingerprint_cached = (cache_identity, value)
+        return value
 
     def _direct_registry_config(self, path: Path) -> dict[str, Any]:
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -567,6 +628,80 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
 
         support = self._memory_support()
         automatic = support.automatic_plan
+        # A qualified resident stack is already one complete physical training
+        # ABI.  Normal training must compile that deterministic plan directly;
+        # running it through the old candidate/profile machinery can attach
+        # unrelated worker flags or resurrect a measured entry produced by a
+        # different resident source tree.  Explicit ``trainer.compile()``
+        # (``force``) may still benchmark research candidates, but train()
+        # performs no online search and does not consult a measured winner.
+        if (
+            getattr(support, "execution_path", None) == "resident_exact"
+            and not self.args.auto_tune
+            and not force
+        ):
+            runtime_source_hash = self._direct_fingerprint()
+            request_contract = (
+                self._execution_profile_contract(automatic)
+                if automatic is not None else {
+                    "architecture": report.get("architecture_descriptor"),
+                    "geometry": report.get("execution_plan"),
+                    "compiler_hash": self._engine._engine_fingerprint(),
+                    "runtime_hash": runtime_source_hash,
+                    "source_hash": runtime_source_hash,
+                }
+            )
+            physical_contract = {
+                "schema": "tt-finetune-deterministic-physical-plan-v1",
+                "execution_backend": "resident_exact",
+                "semantic_fingerprint": (
+                    (report.get("architecture_descriptor") or {}).get(
+                        "semantic_fingerprint"
+                    )
+                ),
+                "rank": support.rank,
+                "batch_size": support.batch_size,
+                "sequence_length": support.sequence_length,
+                "runtime_source_hash": runtime_source_hash,
+                "graph_partition": "resident_stack_five_call",
+                "state_policy": "persistent_packed_resident",
+                "attention_policy": "qualified_resident_exact",
+                "mlp_policy": "qualified_resident_exact",
+                "optimizer_policy": "qualified_packed_exact",
+            }
+            plan_id = "p-" + hashlib.sha256(
+                json.dumps(
+                    physical_contract,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
+                ).encode("utf-8")
+            ).hexdigest()[:20]
+            selected = {"plan_id": plan_id, **physical_contract}
+            # Make it explicit that the legacy execution-candidate ABI does
+            # not own this selection. The worker receives the stable resident
+            # arguments derived from the admitted stack plan below.
+            self._selected_execution_candidate = None
+            return {
+                "profile_key": plan_id,
+                "selection_status": "deterministic_compiled",
+                "cache_status": "not_consulted",
+                "cache_reason": (
+                    "qualified resident physical plan is compiled directly"
+                ),
+                "selected": selected,
+                "request_contract": request_contract,
+                "measurements": [],
+                "qualification": {
+                    "measured": False,
+                    "training_state_reused": False,
+                    "selection_authority": (
+                        "deterministic semantic-to-hardware compiler"
+                    ),
+                    "online_candidate_search": False,
+                    "measured_profile_cache_consulted": False,
+                },
+            }
         if not automatic:
             if not (self.args.auto_tune or force):
                 return None
@@ -1465,6 +1600,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             environment.update({
                 "PJRT_DEVICE": "TT",
                 "XLA_STABLEHLO_COMPILE": "1",
+                "TT_FINETUNE_RUNTIME_SOURCE_HASH": self._direct_fingerprint(),
             })
             environment.update(device_environment or {})
         if device:
