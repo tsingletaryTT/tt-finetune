@@ -764,6 +764,12 @@ def build_tt_lang_resident_layer_forward_compact_owner(
 
     if input_rmsnorm_epsilon != post_attention_rmsnorm_epsilon:
         raise ValueError("compact layer currently requires equal RMS epsilons")
+    projection_rope_prefix_only = bool(
+        exact_attention_tail
+        and os.environ.get(
+            "TT_FINETUNE_PROJECTION_ROPE_PREFIX_ONLY", "1"
+        ) != "0"
+    )
     canonical_roles = {"q", "k", "v", "o", "gate", "up", "down"}
     active_lora_roles = tuple(dict.fromkeys(active_lora_roles))
     if not active_lora_roles or not set(active_lora_roles) <= canonical_roles:
@@ -1381,6 +1387,7 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         f"ttnndown{int(production_ttnn_down)}."
         f"spill{int(spill_rank_scaled_intermediates)}."
         f"predeltamlp{int(precomputed_mlp_rank_delta)}."
+        f"ropeprefix{int(projection_rope_prefix_only)}."
         f"{'fusedmlpchk1.' if fused_mlp_checkpoint_publication else ''}"
         f"{'fusedmlpout1.' if fused_mlp_output_publication else ''}"
         f"{'fusedattnchk1.' if fused_attention_checkpoint_publication else ''}"

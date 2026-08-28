@@ -396,8 +396,8 @@ def build_tt_lang_resident_attention_forward_owner(
         projection_rope_prefix_only=(
             exact_attention_tail
             and os.environ.get(
-                "TT_FINETUNE_PROJECTION_ROPE_PREFIX_ONLY", "0"
-            ) == "1"
+                "TT_FINETUNE_PROJECTION_ROPE_PREFIX_ONLY", "1"
+            ) != "0"
         ),
     )
     grouped_rank = (
