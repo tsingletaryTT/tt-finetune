@@ -35,6 +35,7 @@ class SupportResult:
     lora_plus_lr_ratio: float | None = None
     layers_to_transform: tuple[int, ...] | None = None
     ia3_feedforward_modules: tuple[str, ...] | None = None
+    compiled_plan: dict[str, Any] | None = None
     automatic_plan: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -291,6 +292,7 @@ def query_support(
             PlannerRequest,
             HardwareCapabilities,
             LoRATargetGeometry,
+            compile_physical_training_plan,
             estimate_memory,
             plan_autotuned_execution,
             plan_execution,
@@ -418,12 +420,13 @@ def query_support(
             layer_count=descriptor.layer_count,
             requested_mode=memory_mode,
         )
+        compiled_plan = None
         try:
             from .runtime.memory_planner import (
                 P150A_ALLOCATABLE_DRAM_BYTES,
             )
 
-            execution_profile = plan_autotuned_execution(PlannerRequest(
+            compiler_request = PlannerRequest(
                 architecture=descriptor,
                 safe_plan=plan,
                 # architecture intentionally retained its older conservative
@@ -444,7 +447,16 @@ def query_support(
                     "bias": str(lora_bias),
                 }.items())),
                 estimated_device_bytes=memory.estimated_peak_bytes,
-            ))
+            )
+            # This is the production authority: exactly one semantic-to-
+            # hardware plan, selected without a measured cache or online
+            # candidate execution.  The portfolio below remains an audit and
+            # explicit compile-profile facility while migration completes.
+            if plan.capabilities.supported and memory.admitted:
+                compiled_plan = compile_physical_training_plan(
+                    compiler_request
+                ).to_dict()
+            execution_profile = plan_autotuned_execution(compiler_request)
         except ValueError:
             # The accepted safe planner remains authoritative if no optimized
             # autotuner candidate survives analytical pruning.
@@ -503,6 +515,7 @@ def query_support(
                 execution_profile.to_dict()
                 if execution_profile is not None else None
             ),
+            compiled_plan=compiled_plan,
             **{
                 **base,
                 "ia3_feedforward_modules": (

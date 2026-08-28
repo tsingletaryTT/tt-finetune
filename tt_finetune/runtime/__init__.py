@@ -53,6 +53,11 @@ from .execution_runtime import (
     build_resident_executor,
     public_resident_admission,
 )
+from .execution_compiler import (
+    CompiledPhysicalPlan,
+    bind_compiled_plan,
+    compile_physical_training_plan,
+)
 from .memory_planner import MemoryEstimate, estimate_memory
 from .autotuner import (
     CandidateMeasurement,
@@ -121,6 +126,9 @@ __all__ = [
     "ResidentCausalLMExecutor",
     "build_resident_executor",
     "public_resident_admission",
+    "CompiledPhysicalPlan",
+    "bind_compiled_plan",
+    "compile_physical_training_plan",
     "MemoryEstimate",
     "estimate_memory",
     "CandidateMeasurement",

@@ -6,7 +6,15 @@ import transformers
 from transformers import AutoModelForCausalLM
 
 from tt_finetune.architecture import describe_model
-from tt_finetune.runtime import LoRATargetGeometry, plan_execution
+from tt_finetune.runtime import (
+    DataShapeProfile,
+    HardwareCapabilities,
+    LoRATargetGeometry,
+    PlannerRequest,
+    bind_compiled_plan,
+    compile_physical_training_plan,
+    plan_execution,
+)
 from tt_finetune.runtime.execution_runtime import public_resident_admission
 
 
@@ -174,3 +182,84 @@ def test_resident_qualification_zero_fills_uniform_adapter_subset():
     )
     assert partial_qv.selected_stack_backend == "safe_torch_xla_autograd"
     assert partial_qv.selection("lora").implementation == "peft_device_exact"
+
+
+def _compiler_request(descriptor, plan):
+    return PlannerRequest(
+        architecture=descriptor,
+        safe_plan=plan,
+        hardware=HardwareCapabilities(),
+        data=DataShapeProfile.fixed(plan.sequence_length),
+        memory_mode="bf16",
+        adapter_contract=(("method", "lora"),),
+        estimated_device_bytes=plan.estimated_device_bytes,
+    )
+
+
+def test_deterministic_compiler_emits_one_resident_physical_contract():
+    config = transformers.Qwen2Config(
+        hidden_size=896,
+        intermediate_size=4864,
+        num_hidden_layers=24,
+        num_attention_heads=14,
+        num_key_value_heads=2,
+        vocab_size=151936,
+        rope_theta=1_000_000.0,
+        rms_norm_eps=1e-6,
+        attention_bias=True,
+        tie_word_embeddings=True,
+    )
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config)
+    descriptor, _ = describe_model(model)
+    semantic = plan_execution(
+        descriptor, rank=16, batch_size=1, sequence_length=128
+    )
+
+    compiled = compile_physical_training_plan(
+        _compiler_request(descriptor, semantic)
+    )
+
+    assert compiled.execution_backend == "resident_exact"
+    assert compiled.graph_partition == "resident_stack_five_call"
+    assert compiled.execution_candidate is None
+    assert compiled.worker_arguments == ()
+    assert compiled.online_candidate_search is False
+    assert compiled.measured_profile_cache_consulted is False
+
+
+def test_deterministic_compiler_emits_executable_safe_abi_without_search():
+    config = transformers.LlamaConfig(
+        hidden_size=2048,
+        intermediate_size=5632,
+        num_hidden_layers=22,
+        num_attention_heads=32,
+        num_key_value_heads=4,
+        vocab_size=32000,
+    )
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config)
+    descriptor, _ = describe_model(model)
+    semantic = plan_execution(
+        descriptor, rank=8, batch_size=1, sequence_length=128
+    )
+
+    compiled = compile_physical_training_plan(
+        _compiler_request(descriptor, semantic)
+    )
+    bound_a = bind_compiled_plan(
+        compiled.to_dict(),
+        compiler_hash="compiler-a",
+        runtime_source_hash="runtime-a",
+    )
+    bound_b = bind_compiled_plan(
+        compiled.to_dict(),
+        compiler_hash="compiler-a",
+        runtime_source_hash="runtime-b",
+    )
+
+    assert compiled.execution_backend == "safe_torch_xla_autograd"
+    assert compiled.execution_candidate is not None
+    assert "--optimizer-tile-packed" in compiled.worker_arguments
+    assert compiled.online_candidate_search is False
+    assert bound_a["physical_plan_id"] != bound_b["physical_plan_id"]

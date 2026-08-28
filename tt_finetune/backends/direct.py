@@ -627,81 +627,59 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         """Measure a bounded set of currently executable whole-step plans."""
 
         support = self._memory_support()
-        automatic = support.automatic_plan
-        # A qualified resident stack is already one complete physical training
-        # ABI.  Normal training must compile that deterministic plan directly;
-        # running it through the old candidate/profile machinery can attach
-        # unrelated worker flags or resurrect a measured entry produced by a
-        # different resident source tree.  Explicit ``trainer.compile()``
-        # (``force``) may still benchmark research candidates, but train()
-        # performs no online search and does not consult a measured winner.
-        if (
-            getattr(support, "execution_path", None) == "resident_exact"
-            and not self.args.auto_tune
-            and not force
-        ):
-            runtime_source_hash = self._direct_fingerprint()
-            request_contract = (
-                self._execution_profile_contract(automatic)
-                if automatic is not None else {
-                    "architecture": report.get("architecture_descriptor"),
-                    "geometry": report.get("execution_plan"),
-                    "compiler_hash": self._engine._engine_fingerprint(),
-                    "runtime_hash": runtime_source_hash,
-                    "source_hash": runtime_source_hash,
-                }
+        # Production train() consumes one deterministic compiler result for
+        # every supported backend.  It never looks up a measured winner and
+        # never benchmarks candidates, even if the legacy ``auto_tune`` flag
+        # is present.  Explicit compile_profile() passes ``force=True`` and is
+        # retained as an offline calibration/qualification facility.
+        if not force:
+            compiled = getattr(support, "compiled_plan", None)
+            if compiled is None:
+                raise RuntimeError(
+                    "the deterministic hardware compiler did not emit an "
+                    "executable physical plan for an admitted training request"
+                )
+            from ..runtime import (
+                bind_compiled_plan,
+                execution_candidate_from_dict,
             )
-            physical_contract = {
-                "schema": "tt-finetune-deterministic-physical-plan-v1",
-                "execution_backend": "resident_exact",
-                "semantic_fingerprint": (
-                    (report.get("architecture_descriptor") or {}).get(
-                        "semantic_fingerprint"
-                    )
-                ),
-                "rank": support.rank,
-                "batch_size": support.batch_size,
-                "sequence_length": support.sequence_length,
-                "runtime_source_hash": runtime_source_hash,
-                "graph_partition": "resident_stack_five_call",
-                "state_policy": "persistent_packed_resident",
-                "attention_policy": "qualified_resident_exact",
-                "mlp_policy": "qualified_resident_exact",
-                "optimizer_policy": "qualified_packed_exact",
-            }
-            plan_id = "p-" + hashlib.sha256(
-                json.dumps(
-                    physical_contract,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                    default=str,
-                ).encode("utf-8")
-            ).hexdigest()[:20]
-            selected = {"plan_id": plan_id, **physical_contract}
-            # Make it explicit that the legacy execution-candidate ABI does
-            # not own this selection. The worker receives the stable resident
-            # arguments derived from the admitted stack plan below.
-            self._selected_execution_candidate = None
+
+            runtime_source_hash = self._direct_fingerprint()
+            selected = bind_compiled_plan(
+                compiled,
+                compiler_hash=self._engine._engine_fingerprint(),
+                runtime_source_hash=runtime_source_hash,
+            )
+            if selected.get("execution_backend") != support.execution_path:
+                raise RuntimeError(
+                    "emitted execution plan is not the admitted executable "
+                    f"backend: {selected.get('execution_backend')!r} != "
+                    f"{support.execution_path!r}"
+                )
+            candidate_document = selected.get("execution_candidate")
+            self._selected_execution_candidate = (
+                execution_candidate_from_dict(candidate_document)
+                if candidate_document is not None else None
+            )
             return {
-                "profile_key": plan_id,
+                "profile_key": selected["physical_plan_id"],
                 "selection_status": "deterministic_compiled",
                 "cache_status": "not_consulted",
                 "cache_reason": (
-                    "qualified resident physical plan is compiled directly"
+                    "normal training compiles one source-bound physical plan"
                 ),
                 "selected": selected,
-                "request_contract": request_contract,
+                "request_contract": selected["request_contract"],
                 "measurements": [],
                 "qualification": {
                     "measured": False,
                     "training_state_reused": False,
-                    "selection_authority": (
-                        "deterministic semantic-to-hardware compiler"
-                    ),
+                    "selection_authority": selected["selection_authority"],
                     "online_candidate_search": False,
                     "measured_profile_cache_consulted": False,
                 },
             }
+        automatic = support.automatic_plan
         if not automatic:
             if not (self.args.auto_tune or force):
                 return None
