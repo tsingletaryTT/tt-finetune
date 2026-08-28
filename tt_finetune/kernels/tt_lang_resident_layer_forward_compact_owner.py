@@ -321,6 +321,369 @@ def _split_grouped_mlp_writes(
     return result
 
 
+def _fuse_grouped2_checkpoint_publication(
+    program: dict,
+    *,
+    sequence_tiles: int,
+    intermediate_tiles: int,
+    rank_tiles: int,
+    gate_page_offset: int,
+    up_page_offset: int,
+    gate_h_page_offset: int,
+    up_h_page_offset: int,
+) -> dict:
+    """Duplicate grouped2 producer tiles directly into the packed checkpoint.
+
+    The exact grouped2 program must continue publishing gate/up/H into its
+    compiler-owned L1 arena because the resident SwiGLU/down child consumes
+    that representation.  Previously four later physical programs copied the
+    same bytes from that arena into the persistent forward checkpoint.  Give
+    the existing writer a second destination instead: each tile is sent to
+    both destinations before its producer CB is popped.  This changes only
+    NoC destinations; the accepted compute and BF16 packing schedule is left
+    untouched.
+    """
+
+    dimensions = (sequence_tiles, intermediate_tiles, rank_tiles)
+    if any(value <= 0 for value in dimensions):
+        raise ValueError("grouped2 publication dimensions must be positive")
+    offsets = (
+        gate_page_offset,
+        up_page_offset,
+        gate_h_page_offset,
+        up_h_page_offset,
+    )
+    if any(value < 0 for value in offsets):
+        raise ValueError("grouped2 publication offsets must be non-negative")
+
+    result = copy.deepcopy(program)
+    writer_pattern = re.compile(
+        r"get_tensor_accessor_args_cta_offset<\s*6\s*,\s*16\s*>\(\)"
+    )
+    writers = [
+        kernel
+        for kernel in result.get("kernels", [])
+        if kernel.get("thread_type") == "noc"
+        and writer_pattern.search(kernel.get("cpp_source", ""))
+        and "get_compile_time_arg_val(12)" in kernel.get("cpp_source", "")
+        and "get_compile_time_arg_val(4)" in kernel.get("cpp_source", "")
+        and "async_write(" in kernel.get("cpp_source", "")
+    ]
+    if len(writers) != 1:
+        raise ValueError(
+            "grouped2 checkpoint publication expected one qualified writer, "
+            f"found {len(writers)}"
+        )
+    writer = writers[0]
+    if [int(value) for value in writer.get("tensor_indices", [])] != [6]:
+        raise ValueError("grouped2 writer tensor ABI changed")
+
+    total_n_tiles = 2 * intermediate_tiles
+    arena_row_tiles = total_n_tiles + 2 * rank_tiles
+    total_jobs = sequence_tiles * total_n_tiles
+    jobs_per_node = -(-total_jobs // 110)
+    writer["cpp_source"] = f'''#include <cstdint>
+#include "api/compile_time_args.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "tools/profiler/kernel_profiler.hpp"
+
+void kernel_main() {{
+    constexpr uint32_t kGridColumns = 11;
+    constexpr uint32_t kCoreCount = 110;
+    constexpr uint32_t kTileBytes = 2048;
+    constexpr uint32_t kSequenceTiles = {sequence_tiles};
+    constexpr uint32_t kIntermediateTiles = {intermediate_tiles};
+    constexpr uint32_t kRankTiles = {rank_tiles};
+    constexpr uint32_t kTotalNTiles = {total_n_tiles};
+    constexpr uint32_t kArenaRowTiles = {arena_row_tiles};
+    constexpr uint32_t kTotalJobs = {total_jobs};
+    constexpr uint32_t kJobsPerNode = {jobs_per_node};
+    constexpr uint32_t kGatePageOffset = {gate_page_offset};
+    constexpr uint32_t kUpPageOffset = {up_page_offset};
+    constexpr uint32_t kGateHPageOffset = {gate_h_page_offset};
+    constexpr uint32_t kUpHPageOffset = {up_h_page_offset};
+
+    CircularBuffer output(get_compile_time_arg_val(12));
+    CircularBuffer saved_h(get_compile_time_arg_val(4));
+    const auto arena = TensorAccessor(
+        TensorAccessorArgs<
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<
+                6, 16>(), 0>(),
+        get_common_arg_val<uint32_t>(0), kTileBytes);
+    const auto checkpoint = TensorAccessor(
+        TensorAccessorArgs<
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<
+                7, 16>(), 1>(),
+        get_common_arg_val<uint32_t>(1), kTileBytes);
+    Noc noc1(1);
+    const uint32_t node =
+        get_absolute_logical_y() * kGridColumns + get_absolute_logical_x();
+
+    for (uint32_t local = 0; local < kJobsPerNode; ++local) {{
+        const uint32_t job = node * kJobsPerNode + local;
+        if (job >= kTotalJobs) continue;
+        const uint32_t row = job / kTotalNTiles;
+        const uint32_t n = job - row * kTotalNTiles;
+        const uint32_t member = n / kIntermediateTiles;
+        const uint32_t member_n = n - member * kIntermediateTiles;
+
+        output.wait_front(1);
+        const uint32_t output_address = output.get_read_ptr();
+        noc1.async_write(
+            CoreLocalMem<uint32_t>(output_address), arena, kTileBytes, {{}},
+            {{.page_id = row * kArenaRowTiles + n}});
+        noc1.async_write_barrier();
+        noc1.async_write(
+            CoreLocalMem<uint32_t>(output_address), checkpoint, kTileBytes, {{}},
+            {{.page_id = (member ? kUpPageOffset : kGatePageOffset)
+                + row * kIntermediateTiles + member_n}});
+        noc1.async_write_barrier();
+        output.pop_front(1);
+
+        if (member_n == 0) {{
+            saved_h.wait_front(kRankTiles);
+            for (uint32_t rank = 0; rank < kRankTiles; ++rank) {{
+                const uint32_t h_address =
+                    saved_h.get_read_ptr() + rank * kTileBytes;
+                noc1.async_write(
+                    CoreLocalMem<uint32_t>(h_address), arena, kTileBytes, {{}},
+                    {{.page_id = row * kArenaRowTiles + kTotalNTiles
+                        + member * kRankTiles + rank}});
+                noc1.async_write_barrier();
+                noc1.async_write(
+                    CoreLocalMem<uint32_t>(h_address), checkpoint, kTileBytes, {{}},
+                    {{.page_id = (member ? kUpHPageOffset : kGateHPageOffset)
+                        + row * kRankTiles + rank}});
+                noc1.async_write_barrier();
+            }}
+            saved_h.pop_front(kRankTiles);
+        }}
+    }}
+}}
+'''
+    writer["tensor_indices"] = [6, 7]
+    result["num_tensors"] = max(int(result.get("num_tensors", 0)), 8)
+    return result
+
+
+def _fuse_residual_add_publication(
+    program: dict,
+    *,
+    row_tiles: int,
+    column_tiles: int,
+    destination_page_offsets: tuple[int, ...],
+    output_tensor_index: int = 2,
+    checkpoint_tensor_index: int = 3,
+) -> dict:
+    """Publish an exact residual result to L1 and packed DRAM in one writer."""
+
+    if row_tiles <= 0 or column_tiles <= 0:
+        raise ValueError("residual publication dimensions must be positive")
+    offsets = tuple(dict.fromkeys(int(value) for value in destination_page_offsets))
+    if not offsets or any(value < 0 for value in offsets):
+        raise ValueError("residual publication requires non-negative destinations")
+
+    result = copy.deepcopy(program)
+    writer_pattern = re.compile(
+        rf"get_tensor_accessor_args_cta_offset<\s*"
+        rf"{output_tensor_index}\s*,\s*3\s*>\(\)"
+    )
+    writers = [
+        kernel
+        for kernel in result.get("kernels", [])
+        if kernel.get("thread_type") == "noc"
+        and writer_pattern.search(kernel.get("cpp_source", ""))
+        and "get_compile_time_arg_val(2)" in kernel.get("cpp_source", "")
+        and "async_write(" in kernel.get("cpp_source", "")
+    ]
+    if len(writers) != 1:
+        raise ValueError(
+            "residual publication expected one qualified writer, "
+            f"found {len(writers)}"
+        )
+    writer = writers[0]
+    if [int(value) for value in writer.get("tensor_indices", [])] != [
+        output_tensor_index
+    ]:
+        raise ValueError("residual writer tensor ABI changed")
+
+    total_tiles = row_tiles * column_tiles
+    publication_writes = "\n".join(
+        f'''        noc1.async_write(
+            CoreLocalMem<uint32_t>(address), checkpoint, kTileBytes, {{}},
+            {{.page_id = {offset} + tile_id}});
+        noc1.async_write_barrier();'''
+        for offset in offsets
+    )
+    writer["cpp_source"] = f'''#include <cstdint>
+#include "api/compile_time_args.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+#include "tools/profiler/kernel_profiler.hpp"
+
+void kernel_main() {{
+    constexpr uint32_t kGridColumns = 11;
+    constexpr uint32_t kTileBytes = 2048;
+    constexpr uint32_t kColumnTiles = {column_tiles};
+    constexpr uint32_t kTotalTiles = {total_tiles};
+    CircularBuffer result(get_compile_time_arg_val(2));
+    const auto local_output = TensorAccessor(
+        TensorAccessorArgs<
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<
+                {output_tensor_index}, 3>(), 0>(),
+        get_common_arg_val<uint32_t>(0), kTileBytes);
+    const auto checkpoint = TensorAccessor(
+        TensorAccessorArgs<
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<
+                {checkpoint_tensor_index}, 3>(), 1>(),
+        get_common_arg_val<uint32_t>(1), kTileBytes);
+    Noc noc1(1);
+    const uint32_t node =
+        get_absolute_logical_y() * kGridColumns + get_absolute_logical_x();
+    for (uint32_t column = 0; column < kColumnTiles; ++column) {{
+        const uint32_t tile_id = node * kColumnTiles + column;
+        if (tile_id >= kTotalTiles) continue;
+        result.wait_front(1);
+        const uint32_t address = result.get_read_ptr();
+        noc1.async_write(
+            CoreLocalMem<uint32_t>(address), local_output, kTileBytes, {{}},
+            {{.page_id = tile_id}});
+        noc1.async_write_barrier();
+{publication_writes}
+        result.pop_front(1);
+    }}
+}}
+'''
+    writer["tensor_indices"] = [
+        output_tensor_index, checkpoint_tensor_index,
+    ]
+    result["num_tensors"] = max(int(result.get("num_tensors", 0)), 4)
+    return result
+
+
+def _fuse_rmsnorm_checkpoint_publication(
+    program: dict,
+    *,
+    row_tiles: int,
+    column_tiles: int,
+    destination_page_offset: int,
+    output_tensor_index: int,
+    checkpoint_tensor_index: int,
+) -> dict:
+    """Duplicate exact RMSNorm writer tiles into the backward checkpoint."""
+
+    if row_tiles <= 0 or column_tiles <= 0:
+        raise ValueError("RMSNorm publication dimensions must be positive")
+    if destination_page_offset < 0:
+        raise ValueError("RMSNorm publication destination must be non-negative")
+    result = copy.deepcopy(program)
+    output_pattern = re.compile(
+        rf"get_tensor_accessor_args_cta_offset<\s*"
+        rf"{output_tensor_index}\s*,\s*total_cbs\s*>\(\)"
+    )
+    writers = [
+        kernel
+        for kernel in result.get("kernels", [])
+        if kernel.get("thread_type") == "noc"
+        and output_pattern.search(kernel.get("cpp_source", ""))
+        and "Final BF16 writer for the exact resident RMSNorm" in kernel.get(
+            "cpp_source", ""
+        )
+    ]
+    if len(writers) != 1:
+        raise ValueError(
+            "RMSNorm publication expected one qualified writer, "
+            f"found {len(writers)}"
+        )
+    writer = writers[0]
+    if [int(value) for value in writer.get("tensor_indices", [])] != [
+        output_tensor_index
+    ]:
+        raise ValueError("RMSNorm writer tensor ABI changed")
+    source = writer.get("cpp_source", "")
+    cb_match = re.search(r"cb_output\s*=\s*(\d+)", source)
+    block_match = re.search(r"published_block_tiles\s*=\s*(\d+)", source)
+    total_cbs_match = re.search(r"total_cbs\s*=\s*(\d+)", source)
+    if not (cb_match and block_match and total_cbs_match):
+        raise ValueError("RMSNorm writer schedule metadata changed")
+    if "replicate_scalar = false" not in source:
+        raise ValueError("RMSNorm publication only supports full-width output")
+    cb_output = int(cb_match.group(1))
+    published_block_tiles = int(block_match.group(1))
+    total_cbs = int(total_cbs_match.group(1))
+    writer["cpp_source"] = f'''// Final BF16 writer plus exact packed checkpoint publication.
+#include <cstdint>
+#include "api/compile_time_args.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
+
+void kernel_main() {{
+    constexpr uint32_t cb_output = {cb_output};
+    constexpr uint32_t output_tiles = {column_tiles};
+    constexpr uint32_t published_block_tiles = {published_block_tiles};
+    constexpr uint32_t token_tiles = {row_tiles};
+    constexpr uint32_t total_cbs = {total_cbs};
+    constexpr uint32_t tile_bytes = 2048;
+    constexpr uint32_t checkpoint_page_offset = {destination_page_offset};
+    const uint32_t node =
+        get_absolute_logical_y() * 11 + get_absolute_logical_x();
+    if (node >= token_tiles) return;
+
+    const auto output_tensor = TensorAccessor(
+        TensorAccessorArgs<
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<
+                {output_tensor_index}, total_cbs>(), 0>(),
+        get_common_arg_val<uint32_t>(0), tile_bytes);
+    const auto checkpoint = TensorAccessor(
+        TensorAccessorArgs<
+            tensor_accessor::detail::get_tensor_accessor_args_cta_offset<
+                {checkpoint_tensor_index}, total_cbs>(), 1>(),
+        get_common_arg_val<uint32_t>(1), tile_bytes);
+    Noc noc1(1);
+    CircularBuffer output(cb_output);
+    uint32_t page = node * output_tiles;
+    for (uint32_t start = 0; start < output_tiles;
+         start += published_block_tiles) {{
+        const uint32_t valid =
+            output_tiles - start < published_block_tiles
+                ? output_tiles - start
+                : published_block_tiles;
+        output.wait_front(published_block_tiles);
+        for (uint32_t tile = 0; tile < valid; ++tile) {{
+            const uint32_t address =
+                output.get_read_ptr() + tile * tile_bytes;
+            noc1.async_write(
+                CoreLocalMem<uint32_t>(address), output_tensor, tile_bytes,
+                {{}}, {{.page_id = page}});
+            noc1.async_write(
+                CoreLocalMem<uint32_t>(address), checkpoint, tile_bytes,
+                {{}}, {{.page_id = checkpoint_page_offset + page}});
+            ++page;
+        }}
+        noc1.async_write_barrier();
+        output.pop_front(published_block_tiles);
+    }}
+}}
+'''
+    writer["tensor_indices"] = [
+        output_tensor_index, checkpoint_tensor_index,
+    ]
+    result["num_tensors"] = int(result.get("num_tensors", 0)) + 1
+    return result
+
+
 def _offset_hardcoded_cbs(program: dict, *, offset: int) -> dict:
     """Move a custom resident child into a disjoint physical CB epoch."""
 
@@ -454,7 +817,11 @@ def build_tt_lang_resident_layer_forward_compact_owner(
     # tier for transient tensors once the complete attention+MLP allocation
     # would overlap static circular buffers in a full autograd graph.
     spill_rank_scaled_intermediates = bool(
-        canonical_mlp and logical_rank is not None and logical_rank >= 32
+        canonical_mlp
+        and (
+            (logical_rank is not None and logical_rank >= 32)
+            or os.environ.get("TT_FINETUNE_TRACE_SAFE_SPILL", "0") == "1"
+        )
     )
 
     def planned_internal_spec(spec: dict[str, object]) -> dict[str, object]:
@@ -487,6 +854,36 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         "TT_FINETUNE_DEBUG_PUBLISH_LAYER_DOWN", "0"
     ) == "1"
     debug_mlp_stage = os.environ.get("TT_FINETUNE_DEBUG_LAYER_MLP_STAGE", "")
+    # These publication fusions are part of the exact resident schedule, not
+    # optional numerical kernels.  They only retarget the already-packed BF16
+    # writer tiles to their persistent checkpoint destinations before the
+    # producer CB is popped.  The isolated 20-step evolving-state authority
+    # proves equality for every loss, gradient, trainable and AdamW state.
+    # Keep a disable value for matched reference/diagnostic runs, but compile
+    # the non-materializing schedule by default whenever the exact owner is
+    # selected.
+    fused_mlp_checkpoint_publication = bool(
+        production_exact_mlp
+        and os.environ.get(
+            "TT_FINETUNE_FUSED_MLP_CHECKPOINT_PUBLICATION", "1"
+        ) != "0"
+    )
+    fused_mlp_output_publication = bool(
+        production_exact_mlp
+        and os.environ.get(
+            "TT_FINETUNE_FUSED_MLP_OUTPUT_PUBLICATION", "1"
+        ) != "0"
+    )
+    fused_attention_checkpoint_publication = bool(
+        production_exact_mlp
+        and os.environ.get(
+            "TT_FINETUNE_FUSED_ATTENTION_CHECKPOINT_PUBLICATION", "1"
+        ) != "0"
+    )
+    output_publication_programs = 1 + int(
+        publish_layer_output_at_page_zero
+        and monolithic.layer_output_page_offset != 0
+    )
     if canonical_mlp:
         if False and production_native_gate_up:
             hidden_tiles = hidden_features // 32
@@ -984,6 +1381,9 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         f"ttnndown{int(production_ttnn_down)}."
         f"spill{int(spill_rank_scaled_intermediates)}."
         f"predeltamlp{int(precomputed_mlp_rank_delta)}."
+        f"{'fusedmlpchk1.' if fused_mlp_checkpoint_publication else ''}"
+        f"{'fusedmlpout1.' if fused_mlp_output_publication else ''}"
+        f"{'fusedattnchk1.' if fused_attention_checkpoint_publication else ''}"
         f"debugmlp{debug_mlp_stage or 'down'}.v85"
     )
 
@@ -1030,40 +1430,61 @@ def build_tt_lang_resident_layer_forward_compact_owner(
             for child in attention_children
         ]
 
+        residual_checkpoint_offset = monolithic.forward_plan.arena.slice(
+            "post_attention_residual"
+        ).page_offset
+        normalized_checkpoint_offset = monolithic.forward_plan.arena.slice(
+            "post_attention_normalized"
+        ).page_offset
+        if fused_attention_checkpoint_publication:
+            if len(children) < 2:
+                raise RuntimeError(
+                    "compact attention has no residual/RMSNorm publication tail"
+                )
+            children[-2] = _fuse_residual_add_publication(
+                children[-2],
+                row_tiles=sequence_length // 32,
+                column_tiles=hidden_features // 32,
+                destination_page_offsets=(residual_checkpoint_offset,),
+                output_tensor_index=32,
+                checkpoint_tensor_index=30,
+            )
+            children[-1] = _fuse_rmsnorm_checkpoint_publication(
+                children[-1],
+                row_tiles=sequence_length // 32,
+                column_tiles=hidden_features // 32,
+                destination_page_offset=normalized_checkpoint_offset,
+                output_tensor_index=31,
+                checkpoint_tensor_index=30,
+            )
+
         # Tensors 32 and 31 remain in L1 for the immediate MLP handoff, but
         # they are also long-lived checkpoints consumed after the complete
         # model forward. Publish them once into the packed arena without
         # replacing the private handoff. Previously those arena regions kept
         # their zero initializer, so real-model backward consumed zeros even
         # though the compact forward/MLP prefix itself executed correctly.
-        residual_copy = compile_serialized_child(
-            checkpoint_copy, (t00, t30)
-        )
-        residual_copy = retarget_tensor_writes_to_packed_pages(
-            residual_copy,
-            packed_tensor=1,
-            tensor_page_offsets={
-                1: monolithic.forward_plan.arena.slice(
-                    "post_attention_residual"
-                ).page_offset,
-            },
-        )
-        normalized_copy = compile_serialized_child(
-            checkpoint_copy, (t00, t30)
-        )
-        normalized_copy = retarget_tensor_writes_to_packed_pages(
-            normalized_copy,
-            packed_tensor=1,
-            tensor_page_offsets={
-                1: monolithic.forward_plan.arena.slice(
-                    "post_attention_normalized"
-                ).page_offset,
-            },
-        )
-        children.extend((
-            _remap_used(residual_copy, {0: 32, 1: 30}),
-            _remap_used(normalized_copy, {0: 31, 1: 30}),
-        ))
+        if not fused_attention_checkpoint_publication:
+            residual_copy = compile_serialized_child(
+                checkpoint_copy, (t00, t30)
+            )
+            residual_copy = retarget_tensor_writes_to_packed_pages(
+                residual_copy,
+                packed_tensor=1,
+                tensor_page_offsets={1: residual_checkpoint_offset},
+            )
+            normalized_copy = compile_serialized_child(
+                checkpoint_copy, (t00, t30)
+            )
+            normalized_copy = retarget_tensor_writes_to_packed_pages(
+                normalized_copy,
+                packed_tensor=1,
+                tensor_page_offsets={1: normalized_checkpoint_offset},
+            )
+            children.extend((
+                _remap_used(residual_copy, {0: 32, 1: 30}),
+                _remap_used(normalized_copy, {0: 31, 1: 30}),
+            ))
 
         # Reset both semaphore mailboxes and the program's CB epoch before
         # the following all-core MLP producer.  A noc-only clear was enough
@@ -1421,6 +1842,17 @@ def build_tt_lang_resident_layer_forward_compact_owner(
                 packed_tensor=20,
                 tensor_page_offsets={1: grouped_weight_offset},
             )
+            if fused_mlp_checkpoint_publication:
+                group_child = _fuse_grouped2_checkpoint_publication(
+                    group_child,
+                    sequence_tiles=sequence_tiles,
+                    intermediate_tiles=intermediate_tiles,
+                    rank_tiles=rank_tiles,
+                    gate_page_offset=monolithic.mlp_gate_page_offset,
+                    up_page_offset=monolithic.mlp_up_page_offset,
+                    gate_h_page_offset=monolithic.mlp_gate_h_page_offset,
+                    up_h_page_offset=monolithic.mlp_up_h_page_offset,
+                )
             group_mapping = {
                 0: 31,
                 20: 20,
@@ -1439,6 +1871,7 @@ def build_tt_lang_resident_layer_forward_compact_owner(
                     if precomputed_mlp_rank_delta else 24
                 ),
                 6: group_id,
+                **({7: 30} if fused_mlp_checkpoint_publication else {}),
             }
             children.append(_remap_used(group_child, group_mapping))
 
@@ -1460,28 +1893,33 @@ def build_tt_lang_resident_layer_forward_compact_owner(
                     monolithic.mlp_up_h_page_offset,
                 ),
             )
-            for columns, section_offset, destination_offset in checkpoint_sections:
-                section_copy = build_tt_lang_owner_aligned_copy(
-                    rows=sequence_length, columns=columns
-                )
-                copy_child = compile_serialized_child(
-                    section_copy, (grouped_arena, t30)
-                )
-                copy_child = make_serialized_strided_page_copy_bitwise(
-                    copy_child,
-                    rows_tiles=sequence_tiles,
-                    section_column_tiles=columns // 32,
-                    source_row_tiles=grouped_row_tiles,
-                    source_section_offset=section_offset,
-                )
-                copy_child = retarget_tensor_writes_to_packed_pages(
-                    copy_child,
-                    packed_tensor=1,
-                    tensor_page_offsets={1: destination_offset},
-                )
-                children.append(_remap_used(
-                    copy_child, {0: group_id, 1: 30}
-                ))
+            if not fused_mlp_checkpoint_publication:
+                for (
+                    columns,
+                    section_offset,
+                    destination_offset,
+                ) in checkpoint_sections:
+                    section_copy = build_tt_lang_owner_aligned_copy(
+                        rows=sequence_length, columns=columns
+                    )
+                    copy_child = compile_serialized_child(
+                        section_copy, (grouped_arena, t30)
+                    )
+                    copy_child = make_serialized_strided_page_copy_bitwise(
+                        copy_child,
+                        rows_tiles=sequence_tiles,
+                        section_column_tiles=columns // 32,
+                        source_row_tiles=grouped_row_tiles,
+                        source_section_offset=section_offset,
+                    )
+                    copy_child = retarget_tensor_writes_to_packed_pages(
+                        copy_child,
+                        packed_tensor=1,
+                        tensor_page_offsets={1: destination_offset},
+                    )
+                    children.append(_remap_used(
+                        copy_child, {0: group_id, 1: 30}
+                    ))
 
             down_weight = _placeholder_like(
                 t00, (intermediate_features, hidden_features)
@@ -1651,30 +2089,39 @@ def build_tt_lang_resident_layer_forward_compact_owner(
             layer_output = _placeholder_like(
                 t00, (sequence_length, hidden_features)
             )
+            publication_offsets = [monolithic.layer_output_page_offset]
+            if publish_layer_output_at_page_zero and 0 not in publication_offsets:
+                publication_offsets.append(0)
             add_child = compile_serialized_child(
                 mlp_add, (down_arena, t00, layer_output)
             )
+            if fused_mlp_output_publication:
+                add_child = _fuse_residual_add_publication(
+                    add_child,
+                    row_tiles=sequence_tiles,
+                    column_tiles=hidden_tiles,
+                    destination_page_offsets=tuple(publication_offsets),
+                )
             children.append(_remap_used(add_child, {
                 0: down_id,
                 1: 29 if debug_external_mlp_residual else 32,
                 2: layer_output_id,
+                **({3: 30} if fused_mlp_output_publication else {}),
             }))
 
-            publication_offsets = [monolithic.layer_output_page_offset]
-            if publish_layer_output_at_page_zero and 0 not in publication_offsets:
-                publication_offsets.append(0)
-            for destination_offset in publication_offsets:
-                publish = compile_serialized_child(
-                    checkpoint_copy, (layer_output, t30)
-                )
-                publish = retarget_tensor_writes_to_packed_pages(
-                    publish,
-                    packed_tensor=1,
-                    tensor_page_offsets={1: destination_offset},
-                )
-                children.append(_remap_used(
-                    publish, {0: layer_output_id, 1: 30}
-                ))
+            if not fused_mlp_output_publication:
+                for destination_offset in publication_offsets:
+                    publish = compile_serialized_child(
+                        checkpoint_copy, (layer_output, t30)
+                    )
+                    publish = retarget_tensor_writes_to_packed_pages(
+                        publish,
+                        packed_tensor=1,
+                        tensor_page_offsets={1: destination_offset},
+                    )
+                    children.append(_remap_used(
+                        publish, {0: layer_output_id, 1: 30}
+                    ))
             if debug_publish_down and debug_mlp_stage in (
                 "gate_private", "up_private"
             ):
@@ -1978,12 +2425,19 @@ def build_tt_lang_resident_layer_forward_compact_owner(
     operation.artifact_format = 4
     operation.physical_programs = (
         attention.physical_programs
+        - (2 if fused_attention_checkpoint_publication else 0)
         + (
             (
                 (21 if production_ttnn_down else 11)
                 if production_exact_mlp else 16
             )
             + (4 if precomputed_mlp_rank_delta else 0)
+            - (4 if fused_mlp_checkpoint_publication else 0)
+            - (
+                output_publication_programs
+                if fused_mlp_output_publication and production_exact_mlp
+                else 0
+            )
             + int(debug_publish_down)
             + int(
                 publish_layer_output_at_page_zero
@@ -2004,6 +2458,15 @@ def build_tt_lang_resident_layer_forward_compact_owner(
     operation.hidden_page_base = hidden_page_base
     operation.publishes_layer_output_at_page_zero = bool(
         publish_layer_output_at_page_zero
+    )
+    operation.fused_mlp_checkpoint_publication = bool(
+        fused_mlp_checkpoint_publication
+    )
+    operation.fused_mlp_output_publication = bool(
+        fused_mlp_output_publication
+    )
+    operation.fused_attention_checkpoint_publication = bool(
+        fused_attention_checkpoint_publication
     )
     operation.layer_used_pages = monolithic.layer_used_pages
     operation.layer_allocated_pages = monolithic.layer_allocated_pages
