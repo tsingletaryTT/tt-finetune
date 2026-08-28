@@ -404,7 +404,7 @@ def build(arguments: argparse.Namespace) -> dict[str, Any]:
         ),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "immutable_reference": {
-            "version": "0.2.0",
+            "version": "0.2.1",
             "source_commit": "4c5f5371fb97d94bf8611bd2f34d0eec6f64e30c",
             "wheel_sha256": (
                 "3f8ac41e30af56bef34c52d6be241c64d652ba7a2c5e37eb15070488726d2d5e"

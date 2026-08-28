@@ -263,3 +263,59 @@ def test_deterministic_compiler_emits_executable_safe_abi_without_search():
     assert "--optimizer-tile-packed" in compiled.worker_arguments
     assert compiled.online_candidate_search is False
     assert bound_a["physical_plan_id"] != bound_b["physical_plan_id"]
+
+
+def test_deterministic_compiler_accepts_irregular_rank_batch_sequence():
+    """An admitted safe ABI must exist for non-power-of-two tile geometry."""
+
+    config = transformers.GPTNeoXConfig(
+        hidden_size=768,
+        intermediate_size=3072,
+        num_hidden_layers=12,
+        num_attention_heads=12,
+        vocab_size=50304,
+        rotary_pct=0.25,
+    )
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config)
+    descriptor, _ = describe_model(model)
+    semantic = plan_execution(
+        descriptor, rank=73, batch_size=3, sequence_length=96
+    )
+
+    compiled = compile_physical_training_plan(
+        _compiler_request(descriptor, semantic)
+    )
+
+    assert compiled.execution_backend == "safe_torch_xla_autograd"
+    assert compiled.execution_candidate is not None
+    assert compiled.execution_candidate["attention_query_block"] == 96
+    assert compiled.execution_candidate["attention_kv_block"] == 96
+    assert compiled.execution_candidate["rank_tile_width"] == 96
+
+
+def test_falcon_multi_query_flag_overrides_generated_hf_kv_head_default():
+    """Older Falcon MQA checkpoints expose one KV head in fused geometry."""
+
+    config = transformers.FalconConfig(
+        hidden_size=128,
+        ffn_hidden_size=512,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        vocab_size=256,
+        multi_query=True,
+    )
+    # HF currently synthesizes this contradictory compatibility field.
+    assert config.num_kv_heads == config.num_attention_heads
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config)
+
+    descriptor, mapping = describe_model(model)
+    qkv = mapping.layers[0].projection("qkv")
+
+    assert descriptor.attention_kind == "mqa"
+    assert descriptor.kv_heads == 1
+    assert descriptor.qkv_projection_layout == "fused_linear"
+    assert qkv.output_features == descriptor.hidden_size + 2 * (
+        descriptor.head_dimension
+    )

@@ -2115,7 +2115,8 @@ def extract_resident_full_mlp_forward_child(
     """Extract the accepted MLP continuation from a full-layer artifact.
 
     The historical full-layer program co-locates attention and MLP on the
-    same 60-core island.  Its MLP arithmetic is already qualified, but its
+    same 60-core island.  Its MLP arithmetic may use either the historical
+    register-paired SwiGLU or the exact decomposed-BF16 continuation, but its
     input arrives through a projection-writer CB epoch that cannot follow the
     newly recovered TTNN RMSNorm schedule safely.  This transformation keeps
     the gate/up, paired SwiGLU, down and residual helpers unchanged, replaces
@@ -2139,8 +2140,13 @@ def extract_resident_full_mlp_forward_child(
     ]
     compute_candidates = [
         kernel for kernel in kernels
-        if "run_resident_layer_paired_gate_up_swiglu();" in kernel.get(
-            "cpp_source", ""
+        if (
+            "run_resident_layer_paired_gate_up_swiglu();" in kernel.get(
+                "cpp_source", ""
+            )
+            or "run_resident_layer_gate_up_compute();" in kernel.get(
+                "cpp_source", ""
+            )
         )
         and "resident_layer_swiglu_down_compute::run();" in kernel.get(
             "cpp_source", ""
@@ -2167,6 +2173,45 @@ def extract_resident_full_mlp_forward_child(
     )
 
     reader_source = reader["cpp_source"]
+    # This extracted child is a new physical TT-Metal program.  The previous
+    # attention child has therefore retired before any of these RISCs start,
+    # but the reused L1 CB control words still contain the preceding child's
+    # counters and pointers.  The monolithic source waits for received==acked
+    # because its attention and MLP epochs share one physical program.  That
+    # wait is invalid after extraction: aliased attention CBs can retain
+    # counters from the opposite producer/consumer direction and can never
+    # satisfy the MLP reader's local equality test.  Reset the already-drained
+    # epoch directly.  The reconstructed writer below does not release the
+    # compute RISC until the reader publishes init_ready, so no other RISC can
+    # observe a partially rebased interface.
+    rebase_start_marker = (
+        "static __attribute__((noinline, noclone)) void\n"
+        "rebase_empty_producer_cb(uint32_t cb_id) {"
+    )
+    rebase_start = reader_source.index(rebase_start_marker)
+    rebase_stop = reader_source.index(
+        "\n// Arm a reusable all-reader generation", rebase_start
+    )
+    extracted_rebase = (
+        "static __attribute__((noinline, noclone)) void\n"
+        "rebase_empty_producer_cb(uint32_t cb_id) {\n"
+        "    // A preceding physical-program boundary proves the old epoch\n"
+        "    // retired.  Do not wait on direction-aliased attention counters.\n"
+        "    *get_cb_tiles_received_ptr(cb_id) = 0;\n"
+        "    *get_cb_tiles_acked_ptr(cb_id) = 0;\n"
+        "    auto& interface = get_local_cb_interface(cb_id);\n"
+        "    const uint32_t base = interface.fifo_limit - interface.fifo_size;\n"
+        "    interface.fifo_rd_ptr = base;\n"
+        "    interface.fifo_wr_ptr = base;\n"
+        "    interface.tiles_acked_received_init = 0;\n"
+        "    interface.fifo_wr_tile_ptr = 0;\n"
+        "}\n"
+    )
+    reader_source = (
+        reader_source[:rebase_start]
+        + extracted_rebase
+        + reader_source[rebase_stop:]
+    )
     accessor_match = re.search(
         r"get_tensor_accessor_args_cta_offset<\s*20\s*,\s*(\d+)\s*>",
         reader_source,
@@ -2527,6 +2572,16 @@ def extract_resident_full_mlp_forward_child(
     compute_start = compute_source.index(
         "__attribute__((optimize(\"Os\"))) void kernel_main()"
     )
+    decomposed_gate_up = (
+        compute_source.find(
+            "run_resident_layer_gate_up_compute();", compute_start
+        ) >= 0
+    )
+    gate_up_compute_call = (
+        "    run_resident_layer_gate_up_compute();\n"
+        if decomposed_gate_up else
+        "    run_resident_layer_paired_gate_up_swiglu();\n"
+    )
     compute["cpp_source"] = (
         compute_source[:compute_start]
         + "__attribute__((optimize(\"Os\"))) void kernel_main() {\n"
@@ -2534,7 +2589,7 @@ def extract_resident_full_mlp_forward_child(
         + "    CircularBuffer invocation_acknowledgement(31);\n"
         + "    invocation_release.wait_front(1);\n"
         + "    invocation_release.pop_front(1);\n"
-        + "    run_resident_layer_paired_gate_up_swiglu();\n"
+        + gate_up_compute_call
         + "    resident_layer_swiglu_down_compute::run();\n"
         + "    invocation_acknowledgement.reserve_back(1);\n"
         + "    invocation_acknowledgement.push_back(1);\n"
@@ -2580,6 +2635,17 @@ def extract_resident_full_mlp_forward_child(
         + "    Noc noc1(1);\n"
         + "    CircularBuffer invocation_release(28);\n"
         + "    CircularBuffer invocation_acknowledgement(31);\n"
+        + "    // The reader owns startup reset of every reused CB epoch.\n"
+        + "    // Hold the compute RISC until that reset and the direct L1\n"
+        + "    // normalized-input publication are both complete.\n"
+        + "    auto* init_ready = reinterpret_cast<\n"
+        + "        volatile tt_l1_ptr uint32_t*>(get_semaphore(2));\n"
+        + '    WAYPOINT("MWIR");\n'
+        + "    while (true) {\n"
+        + "        invalidate_l1_cache();\n"
+        + "        if (*init_ready == 1) break;\n"
+        + "    }\n"
+        + '    WAYPOINT("MWI1");\n'
         + "    invocation_release.reserve_back(1);\n"
         + "    invocation_release.push_back(1);\n"
         + "    resident_layer_gate_up_writer::run(noc1, arena);\n"

@@ -74,7 +74,6 @@ def _macro_signature(candidate: ExecutionGeometryCandidate) -> tuple[Any, ...]:
         candidate.double_buffered,
         candidate.sequence_bucket,
         candidate.rank_tile_width,
-        candidate.optimizer_packing_strategy,
     )
 
 
@@ -164,7 +163,12 @@ def adaptive_candidate_portfolio(
                 # selected-expert schedule while spending all four slots on
                 # dense-boundary variations.
                 + 200_000.0 * (item.moe_schedule not in moe)
-                + 20_000.0 * (item.peft_strategy not in peft)
+                # A native PEFT owner changes the dominant forward/backward
+                # dataflow.  It must be sampled before a second nearby graph
+                # boundary or optimizer packing layout; otherwise small
+                # budgets can completely miss the only candidate that owns
+                # new device work.
+                + 150_000.0 * (item.peft_strategy not in peft)
                 + 10_000.0 * (item.sequence_bucket not in data)
                 + 1_000.0 * (
                     (item.optimizer_packing_strategy, item.optimizer_pack_bytes)

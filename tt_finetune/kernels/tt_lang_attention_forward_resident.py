@@ -63,7 +63,9 @@ def _resident_compute_source(
 #include "api/compute/bcast.h"
 #include "api/compute/reduce.h"
 #include "api/compute/softmax.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/kernel/compute/moreh_common.hpp"
 """
     prefix_kernel = prefix.index("void kernel_main()")
     source = (
@@ -92,8 +94,6 @@ def _resident_compute_source(
             + "\n    run_attention_tail();"
             + source[final_brace:]
         )
-    source = source.replace("@FP32_CANONICAL_ATTENTION@", "1")
-    source = source.replace("@PUBLISH_RAW_SCORE_CHECKPOINT@", "0")
     for marker, value in replacements.items():
         source = source.replace(marker, value)
     if re.search(r"@[A-Z0-9_]+@", source):
@@ -105,6 +105,9 @@ def _resident_compute_source(
 def build_tt_lang_attention_forward_resident(
     *, sequence_length: int, query_heads: int, kv_heads: int,
     head_dim: int, scale: float, projection_handoff: bool = False,
+    canonical_moreh_softmax: bool = False,
+    publish_score_checkpoint: bool = False,
+    fp32_canonical_attention: bool = True,
 ) -> Callable:
     arena_shape = attention_forward_resident_arena_shape(
         sequence_length=sequence_length,
@@ -119,6 +122,9 @@ def build_tt_lang_attention_forward_resident(
     if query_heads * seq_tiles > 60:
         raise ValueError("resident attention forward exceeds 60 active rows")
     scale_bits = struct.unpack("<I", struct.pack("<f", float(scale)))[0]
+    canonical_pow2_scale = bool(
+        canonical_moreh_softmax and float(scale) == 0.125
+    )
 
     global ttl, tt_lang_operation
     if ttl is None or tt_lang_operation is None:
@@ -222,15 +228,18 @@ def build_tt_lang_attention_forward_resident(
 
     variant = hashlib.sha256(
         (
-            f"attention-forward-resident-v1:{sequence_length}:{query_heads}:"
-            f"{kv_heads}:{head_dim}:{scale:.17g}:{int(projection_handoff)}"
+            f"attention-forward-resident-v19-fp32-pv-partial:{sequence_length}:{query_heads}:"
+            f"{kv_heads}:{head_dim}:{scale:.17g}:{int(projection_handoff)}:"
+            f"moreh={int(canonical_moreh_softmax)}:"
+            f"score={int(publish_score_checkpoint)}:"
+            f"fp32={int(fp32_canonical_attention)}"
         ).encode()
     ).hexdigest()[:16]
 
     @tt_lang_operation(
         operation_id=f"tt_finetune.attention_forward_resident.{variant}",
         arg_roles=("in", "in", "in", "in", "in", "in", "out"),
-        version_tag=f"attention-forward-resident-v1-{variant}",
+        version_tag=f"attention-forward-resident-v19-{variant}",
     )
     def operation(query, key, value, cosine, sine, mask, arena):
         _clear_ttl_compile_wrapper_cache(_program)
@@ -264,7 +273,28 @@ def build_tt_lang_attention_forward_resident(
                     "@HIDDEN_TILES@": str(hidden_tiles), "@KV_TILES@": str(kv_tiles),
                     "@QUERY_HEADS@": str(query_heads), "@KV_HEADS@": str(kv_heads),
                     "@SCALE_BITS@": str(scale_bits), "@PV_PHASE_TILES@": "1",
-                    "@FP32_CANONICAL_ATTENTION@": "1",
+                    "@FP32_CANONICAL_ATTENTION@": (
+                        "1" if fp32_canonical_attention else "0"
+                    ),
+                    "@CANONICAL_MOREH_SOFTMAX@": (
+                        "1" if canonical_moreh_softmax else "0"
+                    ),
+                    "@CANONICAL_POW2_SCALE@": (
+                        "1" if canonical_pow2_scale else "0"
+                    ),
+                    "@SCALE_SHIFT@": "3",
+                    "@PROJECTION_ROPE_PREFIX_ONLY@": "0",
+                    "@PUBLISH_RAW_SCORE_CHECKPOINT@": (
+                        "1" if publish_score_checkpoint else "0"
+                    ),
+                    "@ATTENTION_CHECKPOINT_CB@": "27",
+                    "@SOFTMAX_TAIL_MASK_CB@": "28",
+                    "@PROBABILITY_BF16_CB@": (
+                        "19"
+                        if canonical_moreh_softmax and not fp32_canonical_attention
+                        else "28"
+                    ),
+                    "@COMPOSED_INVOCATION_BARRIER@": "0",
                     "@PUBLISH_TARGET_MAILBOX@": "",
                     "@RESET_O_GO@": "",
                     "@HEAD_TO_O_HANDOFF@": "",
@@ -292,19 +322,46 @@ def build_tt_lang_attention_forward_resident(
                 # a full generation so producer modulo pointers cannot alias
                 # the empty state after reuse.
                 capacities[18] = max(capacities[18], seq_tiles + 1)
+                # Q is promoted into this FIFO once, then the canonical simple
+                # BMM schedule appends one Q tile for every (N, K) phase before
+                # consuming the original resident generation.  Budget both
+                # generations plus the wraparound guard explicitly.  The old
+                # ``2 * dim_tiles + seq_tiles`` expression happened to fit
+                # friendly shapes, but deadlocked at S=128/D=64 on the final
+                # streamed Q tile (9 received credits in a 9-tile CB).
                 capacities[19] = max(
-                    capacities[19], 2 * dim_tiles + seq_tiles + 1
+                    capacities[19],
+                    dim_tiles + seq_tiles * dim_tiles + 1,
                 )
                 capacities[20] = max(
                     capacities[20],
                     2 * seq_tiles * dim_tiles + seq_tiles + 1,
                 )
                 capacities[23] = max(capacities[23], 2 * seq_tiles + 1)
-                capacities[30] = max(capacities[30], dim_tiles + 1)
+                if canonical_moreh_softmax and not fp32_canonical_attention:
+                    # CB27 is Moreh's one-tile temporary, then the complete
+                    # probability checkpoint generation. Keep both lifetimes
+                    # physically non-aliasing across the partial pointer epoch.
+                    capacities[27] = max(capacities[27], seq_tiles + 1)
+                capacities[30] = max(
+                    capacities[30],
+                    (
+                        seq_tiles + dim_tiles + 1
+                        if canonical_moreh_softmax else dim_tiles + 1
+                    ),
+                )
                 capacities[28] = max(capacities[28], 1)
-                fp32_cbs = {
-                    18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30,
-                }
+                fp32_cbs = (
+                    {
+                        18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30,
+                    }
+                    if fp32_canonical_attention
+                    else (
+                        {19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 30}
+                        if canonical_moreh_softmax
+                        else {19, 20, 21, 22, 23, 24, 25, 26, 27, 30}
+                    )
+                )
                 for cb_index, blocks in enumerate(capacities):
                     config = CompilerAllocatedDFBConfig(
                         dfb_index=cb_index, num_tiles=1,
@@ -465,4 +522,6 @@ def build_tt_lang_attention_forward_resident(
     operation.probability_raw_pages = 2 * query_heads * seq_tiles * seq_tiles
     operation.intermediate_dram_bytes = 0
     operation.projection_handoff = projection_handoff
+    operation.publish_score_checkpoint = publish_score_checkpoint
+    operation.fp32_canonical_attention = fp32_canonical_attention
     return operation

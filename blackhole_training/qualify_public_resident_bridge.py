@@ -14,6 +14,7 @@ def main() -> int:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rank", type=int, default=8)
+    parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--sequence-length", type=int, default=128)
     parser.add_argument(
         "--target-modules",
@@ -34,6 +35,11 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=24)
     parser.add_argument("--warmups", type=int, default=4)
     parser.add_argument("--logging-steps", type=int, default=1000)
+    parser.add_argument(
+        "--attn-implementation",
+        choices=("eager", "sdpa"),
+        help="Select the public Transformers attention semantic for profiling.",
+    )
     parser.add_argument(
         "--profile-phases",
         action="store_true",
@@ -57,6 +63,8 @@ def main() -> int:
     parser.add_argument("--stop-after", type=int)
     parser.add_argument("--adapter", type=Path)
     args = parser.parse_args()
+    if args.batch_size <= 0:
+        parser.error("--batch-size must be positive")
 
     from tt_finetune import (
         DataConfig,
@@ -69,6 +77,7 @@ def main() -> int:
     model = FastTTModel.from_pretrained(
         args.model,
         max_seq_length=args.sequence_length,
+        attn_implementation=args.attn_implementation,
     )
     if args.adapter is not None:
         model = model.load_adapter(args.adapter)
@@ -78,7 +87,7 @@ def main() -> int:
         max_steps=args.steps,
         num_train_epochs=1000,
         max_seq_length=args.sequence_length,
-        per_device_train_batch_size=1,
+        per_device_train_batch_size=args.batch_size,
         gradient_accumulation_steps=1,
         learning_rate=2.0e-4,
         weight_decay=0.01,
@@ -162,8 +171,9 @@ def main() -> int:
         "target_modules": args.target_modules,
         "adapter_backend": args.adapter_backend,
         "expected_executor": args.expected_executor,
-        "batch_size": 1,
+        "batch_size": args.batch_size,
         "sequence_length": args.sequence_length,
+        "attn_implementation": args.attn_implementation,
         "steps": args.steps,
         "stop_after": args.stop_after,
         "warmups": args.warmups,

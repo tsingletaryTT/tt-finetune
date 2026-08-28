@@ -91,6 +91,60 @@ rebase_empty_producer_cb(uint32_t cb_id) {
     interface.fifo_wr_tile_ptr = 0;
 }
 
+// Keep the O-handoff waits distinguishable in Watcher traces.  Metal's
+// generic noc_semaphore_wait_min helper records only ``NSMW``; when a
+// multi-epoch owner stalls that loses the identity of the generation that
+// failed to arrive.  These are the same cache-invalidating >= waits with a
+// phase-specific waypoint, and compile to the ordinary loop when Watcher is
+// disabled.
+FORCE_INLINE void wait_o_input_ready(
+    volatile tt_l1_ptr uint32_t* semaphore, uint32_t target) {
+    WAYPOINT("OIRW");
+    do { invalidate_l1_cache(); } while (*semaphore < target);
+    WAYPOINT("OIRD");
+}
+
+// The RMSNorm owner has a reader-side invocation barrier before any Q/K/V
+// work begins.  Use that barrier to reset one readiness flag on each
+// projection core, then let the root poll the distributed flags after every
+// core has reserved its complete O-input window.  This keeps reset and
+// publication on the same NCRISC and avoids the lost-update race caused by a
+// writer-RISC reset of one shared atomic counter on repeated submissions.
+FORCE_INLINE void wait_all_o_input_ready_flags() {
+    const uint32_t scratch_address = get_semaphore(kOInputReady);
+    auto* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        scratch_address);
+    // Node zero reaches this routine only after publishing its own local
+    // readiness flag, so it needs to poll the remaining workers only.  Its
+    // local flag is now free to serve as the one-word NoC read scratchpad.
+    for (uint32_t target = 1; target < kWorkers; ++target) {
+        while (true) {
+            noc_semaphore_set(scratch, 0);
+            noc_async_read(
+                projection_l1(
+                    target, get_semaphore(kOInputReady)),
+                scratch_address, sizeof(uint32_t));
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            if (*scratch >= 1) break;
+        }
+    }
+}
+
+FORCE_INLINE void wait_o_h_credit(
+    volatile tt_l1_ptr uint32_t* semaphore, uint32_t target) {
+    WAYPOINT("OHCW");
+    do { invalidate_l1_cache(); } while (*semaphore < target);
+    WAYPOINT("OHCD");
+}
+
+FORCE_INLINE void wait_o_base_credit(
+    volatile tt_l1_ptr uint32_t* semaphore, uint32_t target) {
+    WAYPOINT("OBCW");
+    do { invalidate_l1_cache(); } while (*semaphore < target);
+    WAYPOINT("OBCD");
+}
+
 static __attribute__((noinline, noclone)) void prepare_full_fp32_scalar(
     CircularBuffer& cb, uint32_t scalar_bits) {
     cb.reserve_back(1);
@@ -400,7 +454,40 @@ __attribute__((optimize("Os"))) void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<20, @TOTAL_CBS@>(), 17>(),
         get_common_arg_val<uint32_t>(17), kTileBytes);
     Noc noc0(0);
-
+    if constexpr (!kInputRMSNorm) {
+        // Non-normalized projection variants still need an invocation-start
+        // barrier before distributed O-readiness flags can be reused.  The
+        // same semaphore pair is otherwise idle until the later O/post-block
+        // epoch, so establish the barrier here without introducing another
+        // physical control allocation.
+        volatile tt_l1_ptr uint32_t* init_ready =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(kNormReady));
+        volatile tt_l1_ptr uint32_t* o_ready =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(kOInputReady));
+        noc_semaphore_set(init_ready, 0);
+        noc_semaphore_set(o_ready, 0);
+        noc_semaphore_inc(
+            projection_l1(0, get_semaphore(kNormReadyCount)), 1);
+        noc_async_atomic_barrier();
+        if (node == 0) {
+            volatile tt_l1_ptr uint32_t* count =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_semaphore(kNormReadyCount));
+            noc_semaphore_wait_min(count, kWorkers);
+            noc_semaphore_set(count, 0);
+            noc_semaphore_set(init_ready, 1);
+            for (uint32_t target = 1; target < kWorkers; ++target)
+                noc_async_write(
+                    get_semaphore(kNormReady),
+                    projection_l1(target, get_semaphore(kNormReady)),
+                    sizeof(uint32_t));
+            noc_async_write_barrier();
+        }
+        noc_semaphore_wait_min(init_ready, 1);
+        noc_semaphore_set(init_ready, 0);
+    }
     if constexpr (kInputRMSNorm) {
         // Every participant clears its local generation words before joining
         // the root initialization count. This prevents a previous invocation
@@ -408,7 +495,11 @@ __attribute__((optimize("Os"))) void kernel_main() {
         volatile tt_l1_ptr uint32_t* norm_ready =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_semaphore(kNormReady));
+        volatile tt_l1_ptr uint32_t* o_ready =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_semaphore(kOInputReady));
         noc_semaphore_set(norm_ready, 0);
+        noc_semaphore_set(o_ready, 0);
         noc_semaphore_inc(
             projection_l1(0, get_semaphore(kNormReadyCount)), 1);
         noc_async_atomic_barrier();
@@ -564,17 +655,16 @@ __attribute__((optimize("Os"))) void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(12));
     noc_semaphore_set(h_credit, 0);
     noc_semaphore_set(base_credit, 0);
-    // The projection writer resets the root counter at invocation start.
     // Reaching this point proves this core has reserved both destination
-    // windows and reset its per-core credits.
-    noc_semaphore_inc(projection_l1(0, get_semaphore(kOInputReady)), 1);
-    noc_async_atomic_barrier();
+    // windows and reset its per-core credits.  Every variant has now passed
+    // an invocation-start reader barrier, so readiness is always published
+    // through the distributed per-core flag protocol.
+    volatile tt_l1_ptr uint32_t* local_ready =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            get_semaphore(kOInputReady));
+    noc_semaphore_set(local_ready, 1);
     if (node == 0) {
-        volatile tt_l1_ptr uint32_t* ready =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                get_semaphore(kOInputReady));
-        noc_semaphore_wait_min(ready, kWorkers);
-        noc_semaphore_set(ready, 0);
+        wait_all_o_input_ready_flags();
         volatile tt_l1_ptr uint32_t* h_address =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(4));
         volatile tt_l1_ptr uint32_t* base_address =
@@ -614,9 +704,9 @@ __attribute__((optimize("Os"))) void kernel_main() {
         noc_async_atomic_barrier();
     }
     if (input_tiles != 0) {
-        noc_semaphore_wait_min(
+        wait_o_h_credit(
             h_credit, kDedicatedORank ? local_jobs : input_tiles);
-        noc_semaphore_wait_min(base_credit, input_tiles);
+        wait_o_base_credit(base_credit, input_tiles);
         noc_semaphore_set(h_credit, 0);
         noc_semaphore_set(base_credit, 0);
         if constexpr (!kDedicatedORank) o_hx.push_back(input_tiles);

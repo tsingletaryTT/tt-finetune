@@ -22,6 +22,10 @@ from tt_finetune.architecture import (
     CanonicalModelMap,
 )
 from tt_finetune.kernels.dynamic_sparse_expert import (
+    USE_BLOCK_BATCHED_FORWARD,
+    USE_NATIVE_BLOCK_FORWARD_EXPERIMENT,
+    dynamic_block_batched_support_error,
+    dynamic_block_batched_expert_linear,
     dynamic_expert_input_linear,
     dynamic_pack_expert_assignments,
     dynamic_restore_expert_assignments,
@@ -356,6 +360,7 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         self.last_execution_schedule: str | None = None
         self.last_packed_slot_count: int | None = None
         self.last_selected_assignment_count: int | None = None
+        self._block_batched_forward_admitted = False
 
         self.routed_lora_A = nn.ParameterDict()
         self.routed_lora_B = nn.ParameterDict()
@@ -393,7 +398,51 @@ class GenericDeviceSparseMoELoRA(nn.Module):
             nn.init.kaiming_uniform_(
                 self.shared_lora_A[role], a=math.sqrt(5)
             )
+        shared_roles = set(self.shared_weights)
+        if not shared_roles:
+            self.shared_layout = "none"
+        elif shared_roles == {"gate_up", "down"}:
+            self.shared_layout = "fused_swiglu"
+        elif shared_roles == {"gate", "up", "down"}:
+            self.shared_layout = "separate_swiglu"
+        elif shared_roles == {"up", "down"}:
+            self.shared_layout = "ordinary"
+        else:
+            raise ValueError(
+                "shared expert weights do not form a canonical MLP: "
+                f"{sorted(shared_roles)}"
+            )
         self.shared_gate = shared_gate
+        self._refresh_shared_projection_aliases()
+
+    def _refresh_shared_projection_aliases(self) -> None:
+        """Cache role-specific tensor identities outside ``ParameterDict``.
+
+        The installed Dynamo/AOT combination aliases distinct string-keyed
+        ParameterDict reads inside one compiled graph.  Plain references keep
+        the parameters registered under the stable public state-dict names,
+        while presenting distinct graph operands for gate/up/down.  Bypass
+        ``nn.Module.__setattr__`` so these are aliases rather than duplicate
+        registered parameters.
+        """
+
+        for role in ("gate_up", "gate", "up", "down"):
+            if role not in self.shared_weights:
+                continue
+            object.__setattr__(
+                self, f"_shared_{role}_weight", self.shared_weights[role]
+            )
+            object.__setattr__(
+                self, f"_shared_{role}_lora_a", self.shared_lora_A[role]
+            )
+            object.__setattr__(
+                self, f"_shared_{role}_lora_b", self.shared_lora_B[role]
+            )
+
+    def _apply(self, fn, recurse=True):
+        result = super()._apply(fn, recurse=recurse)
+        self._refresh_shared_projection_aliases()
+        return result
 
     @staticmethod
     def _select(
@@ -570,18 +619,26 @@ class GenericDeviceSparseMoELoRA(nn.Module):
     ) -> torch.Tensor:
         """Execute selected expert blocks and restore assignment order."""
 
-        packed_inputs, block_sparsity = self._pack_dynamic_assignments(
-            inputs, indices, positions
-        )
-        expert_output = dynamic_expert_input_linear(
-            packed_inputs,
-            self.routed_weights[role],
-            block_sparsity,
-            indices,
-        )
-        base = dynamic_restore_expert_assignments(
-            expert_output, indices, positions
-        )
+        if self._block_batched_forward_admitted:
+            base = dynamic_block_batched_expert_linear(
+                inputs,
+                self.routed_weights[role],
+                indices,
+                positions,
+            )
+        else:
+            packed_inputs, block_sparsity = self._pack_dynamic_assignments(
+                inputs, indices, positions
+            )
+            expert_output = dynamic_expert_input_linear(
+                packed_inputs,
+                self.routed_weights[role],
+                block_sparsity,
+                indices,
+            )
+            base = dynamic_restore_expert_assignments(
+                expert_output, indices, positions
+            )
         low = _expert_linear(
             inputs, self._select(self.routed_lora_A[role], indices)
         )
@@ -742,35 +799,95 @@ class GenericDeviceSparseMoELoRA(nn.Module):
         )
         return positions < capacity
 
+    @staticmethod
+    def _project_shared_values(
+        inputs: torch.Tensor,
+        weight: torch.Tensor,
+        lora_a: torch.Tensor,
+        lora_b: torch.Tensor,
+        scaling: float,
+    ) -> torch.Tensor:
+        """Project shared experts from explicit tensor operands.
+
+        The role string must be resolved before Dynamo tracing.  Re-entering
+        one helper with ``role='gate'`` and then ``role='up'`` caused the
+        installed AOT stack to reuse the first specialization incorrectly:
+        compiled forward values changed and the gate A/B parameters vanished
+        from backward.  Explicit operands preserve both arithmetic and
+        autograd identity across every shared-expert projection.
+        """
+
+        expert_major = inputs.transpose(0, 1)
+        output = torch.bmm(
+            expert_major, weight.transpose(1, 2)
+        )
+        low = torch.bmm(
+            expert_major, lora_a.transpose(1, 2)
+        )
+        result = output + torch.bmm(
+            low, lora_b.transpose(1, 2)
+        ) * scaling
+        return result.transpose(0, 1)
+
+    def _project_shared(
+        self,
+        role: str,
+        inputs: torch.Tensor,
+    ) -> torch.Tensor:
+        return self._project_shared_values(
+            inputs,
+            self.shared_weights[role],
+            self.shared_lora_A[role],
+            self.shared_lora_B[role],
+            self.scaling,
+        )
+
     def _shared_experts(self, flat: torch.Tensor) -> torch.Tensor:
         if not self.shared_weights:
             return torch.zeros_like(flat)
         count = int(next(iter(self.shared_weights.values())).shape[0])
         inputs = flat.unsqueeze(1).expand(-1, count, -1)
 
-        def project(role: str, value: torch.Tensor) -> torch.Tensor:
-            expert_major = value.transpose(0, 1)
-            output = torch.bmm(
-                expert_major, self.shared_weights[role].transpose(1, 2)
-            )
-            low = torch.bmm(
-                expert_major, self.shared_lora_A[role].transpose(1, 2)
-            )
-            result = output + torch.bmm(
-                low, self.shared_lora_B[role].transpose(1, 2)
-            ) * self.scaling
-            return result.transpose(0, 1)
-
-        if "gate_up" in self.shared_weights:
-            gate, up = project("gate_up", inputs).chunk(2, dim=-1)
+        if self.shared_layout == "fused_swiglu":
+            gate, up = self._project_shared_values(
+                inputs,
+                self._shared_gate_up_weight,
+                self._shared_gate_up_lora_a,
+                self._shared_gate_up_lora_b,
+                self.scaling,
+            ).chunk(2, dim=-1)
             hidden = _differentiable_silu(gate) * up
-        elif "gate" in self.shared_weights:
+        elif self.shared_layout == "separate_swiglu":
             hidden = _differentiable_silu(
-                project("gate", inputs)
-            ) * project("up", inputs)
+                self._project_shared_values(
+                    inputs,
+                    self._shared_gate_weight,
+                    self._shared_gate_lora_a,
+                    self._shared_gate_lora_b,
+                    self.scaling,
+                )
+            ) * self._project_shared_values(
+                inputs,
+                self._shared_up_weight,
+                self._shared_up_lora_a,
+                self._shared_up_lora_b,
+                self.scaling,
+            )
         else:
-            hidden = F.gelu(project("up", inputs))
-        outputs = project("down", hidden)
+            hidden = F.gelu(self._project_shared_values(
+                inputs,
+                self._shared_up_weight,
+                self._shared_up_lora_a,
+                self._shared_up_lora_b,
+                self.scaling,
+            ))
+        outputs = self._project_shared_values(
+            hidden,
+            self._shared_down_weight,
+            self._shared_down_lora_a,
+            self._shared_down_lora_b,
+            self.scaling,
+        )
         if self.shared_gate is None:
             weights = torch.ones(
                 flat.shape[0], count, dtype=flat.dtype, device=flat.device
@@ -823,10 +940,29 @@ class GenericDeviceSparseMoELoRA(nn.Module):
             if support_error is not None:
                 raise RuntimeError(support_error)
             assert positions is not None
+            block_errors = [
+                dynamic_block_batched_support_error(
+                    tokens=int(flat.shape[0]),
+                    top_k=self.top_k,
+                    expert_count=self.expert_count,
+                    input_features=int(weight.shape[-1]),
+                    output_features=int(weight.shape[-2]),
+                    element_size=weight.element_size(),
+                )
+                for weight in self.routed_weights.values()
+            ]
+            self._block_batched_forward_admitted = (
+                (USE_BLOCK_BATCHED_FORWARD or USE_NATIVE_BLOCK_FORWARD_EXPERIMENT)
+                and not any(block_errors)
+            )
             routed = self._routed_experts_dynamic(
                 flat, selected_indices, positions
             )
-            self.last_execution_schedule = "dynamic_native_expert_bucketed"
+            self.last_execution_schedule = (
+                "dynamic_selected_block_batched"
+                if self._block_batched_forward_admitted
+                else "dynamic_native_expert_bucketed"
+            )
             self.last_selected_assignment_count = int(selected_indices.numel())
             self.last_packed_slot_count = (
                 int(flat.shape[0]) * self.expert_count

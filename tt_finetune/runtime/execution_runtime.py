@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -478,6 +479,11 @@ def build_resident_executor(
         device=device,
         compact_forward=True,
         canonical_exact_attention=True,
+        diagnostic_forward_checkpoint_layer=(
+            int(os.environ["TT_FINETUNE_DEBUG_FORWARD_CHECKPOINT_LAYER"])
+            if "TT_FINETUNE_DEBUG_FORWARD_CHECKPOINT_LAYER" in os.environ
+            else None
+        ),
     )
     return ResidentCausalLMExecutor(
         plan=plan,

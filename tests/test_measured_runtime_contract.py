@@ -26,7 +26,7 @@ def _candidate(**overrides):
         "graph_partition": "forward_backward_fused",
         "activation_policy": "framework_safe",
         "frozen_weight_policy": "framework_managed",
-        "moe_schedule": "dynamic_native_expert_bucketed",
+        "moe_schedule": "dynamic_selected_block_batched",
         "prefetch_depth": 0,
         "double_buffered": False,
         "sequence_bucket": 128,

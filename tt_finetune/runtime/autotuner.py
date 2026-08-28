@@ -389,14 +389,20 @@ def _candidate_knobs(request: PlannerRequest) -> list[dict[str, Any]]:
     plan = request.safe_plan
     descriptor = request.architecture
     sequence = plan.sequence_length
-    valid_blocks = tuple(
-        value for value in (32, 64, 128, 256, 512)
-        if value <= max(32, _ceil_to(sequence, 32))
-    ) or (32,)
-    default_block = min(
-        128,
-        max(value for value in valid_blocks if value <= max(32, sequence)),
-    )
+    # The safe dense-attention ABI consumes the complete padded sequence when
+    # S <= 128.  That block is not necessarily a power of two: S=96 must emit
+    # a 96-token block, for example.  Previously the candidate generator
+    # rounded such geometries *down* to 64 while the admission check correctly
+    # expected 96.  Every candidate was consequently rejected even though the
+    # semantic planner had admitted the safe path.
+    default_block = min(128, _ceil_to(sequence, TILE_SIZE))
+    valid_blocks = tuple(sorted({
+        default_block,
+        *(
+            value for value in (32, 64, 128, 256, 512)
+            if value <= max(32, _ceil_to(sequence, TILE_SIZE))
+        ),
+    }))
     attention_cores = _largest_core_multiple(
         request.hardware.worker_cores, descriptor.attention_heads
     )
@@ -520,7 +526,7 @@ def _candidate_knobs(request: PlannerRequest) -> list[dict[str, Any]]:
         for schedule in (
             "assignment_weight_gather",
             "expert_capacity_bucketed",
-            "dynamic_native_expert_bucketed",
+            "dynamic_selected_block_batched",
         ):
             if schedule != runtime_base["moe_schedule"]:
                 vary(moe_schedule=schedule)
@@ -691,7 +697,7 @@ def _evaluate_candidate(
     ) + checkpoint_bytes + prefetch_bytes
     if (
         descriptor.moe is not None
-        and knobs["moe_schedule"] == "dynamic_native_expert_bucketed"
+        and knobs["moe_schedule"] == "dynamic_selected_block_batched"
     ):
         # The current single-card sparse_matmul ABI materializes only the
         # active layer's block-sparse expert-major activations.  Account for
@@ -869,7 +875,7 @@ def _evaluate_candidate(
             reasons.append(
                 "static expert buckets require an explicit capacity/drop contract"
             )
-    if knobs["moe_schedule"] == "dynamic_native_expert_bucketed":
+    if knobs["moe_schedule"] == "dynamic_selected_block_batched":
         if descriptor.moe is None:
             reasons.append("dynamic expert scheduling requires MoE semantics")
         else:
@@ -976,7 +982,7 @@ def candidate_worker_arguments(
         "--peft-execution-strategy", candidate.peft_strategy,
         "--moe-execution-strategy", (
             "dynamic"
-            if candidate.moe_schedule == "dynamic_native_expert_bucketed"
+            if candidate.moe_schedule == "dynamic_selected_block_batched"
             else "sparse"
             if candidate.moe_schedule == "expert_capacity_bucketed"
             else "safe"

@@ -502,11 +502,21 @@ def describe_config(
             "attention_heads",
         )
     )
-    kv_heads = int(
-        _read(
-            values,
-            "num_key_value_heads", "num_kv_heads", "n_head_kv",
-            default=(1 if values.get("multi_query") else heads),
+    # Falcon's current HF config adapter synthesizes ``num_kv_heads=heads``
+    # even for older checkpoints whose authoritative ``multi_query=True``
+    # contract and fused QKV tensor geometry encode one shared KV head.  Treat
+    # the explicit semantic flag as authoritative rather than the generated
+    # compatibility default.  This is a config-dialect normalization only;
+    # execution still depends on the canonical MQA geometry below.
+    kv_heads = (
+        1
+        if bool(values.get("multi_query", False))
+        else int(
+            _read(
+                values,
+                "num_key_value_heads", "num_kv_heads", "n_head_kv",
+                default=heads,
+            )
         )
     )
     head_dim = int(_read(values, "head_dim", default=hidden // heads))

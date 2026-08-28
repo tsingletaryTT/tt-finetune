@@ -617,6 +617,30 @@ def plan_execution(
             and moe.expert_count <= 32
             and moe.top_k <= 8
         )
+        maximum_blocks_per_expert = math.ceil(logical_tokens / TILE_SIZE)
+        initially_occupied_experts = min(assignments, moe.expert_count)
+        maximum_assignment_blocks = min(
+            moe.expert_count * maximum_blocks_per_expert,
+            initially_occupied_experts
+            + (assignments - initially_occupied_experts) // TILE_SIZE,
+        )
+        maximum_projection_factor = (
+            2
+            if moe.expert_mlp_kind == "swiglu"
+            and moe.expert_storage_layout == "fused"
+            else 1
+        )
+        maximum_block_weight_view_bytes = (
+            maximum_assignment_blocks
+            * maximum_projection_factor
+            * descriptor.hidden_size
+            * expert_i
+            * dtype_bytes
+        )
+        block_batched_no_capacity = (
+            dynamic_no_capacity
+            and maximum_block_weight_view_bytes <= 256 * 1024 * 1024
+        )
         if capacity_bucketed:
             capacity = int(math.ceil(
                 moe.expert_capacity_factor
@@ -645,6 +669,40 @@ def plan_execution(
             moe_packed_assignment_slots = packed_slots
             moe_weight_replication_avoided_bytes = (
                 assignments * per_assignment_weights * dtype_bytes
+            )
+        elif block_batched_no_capacity:
+            # Homogeneous selected-expert blocks are distributed as ordinary
+            # full-tile BMM work.  The current lowering materializes one
+            # frozen-weight view per bounded block, so admission includes that
+            # representation rather than claiming the native reader already
+            # avoids it.
+            packed_slots = maximum_assignment_blocks * TILE_SIZE
+            dispatch_elements = assignments * packed_slots
+            block_weight_view_bytes = (
+                maximum_assignment_blocks
+                * per_assignment_weights
+                * dtype_bytes
+            )
+            moe_routed_scratch_bytes = (
+                dispatch_elements * 5
+                + assignments * descriptor.hidden_size * dtype_bytes
+                + block_weight_view_bytes
+            )
+            moe_selected_activation_bytes = (
+                packed_slots
+                * (2 * descriptor.hidden_size + selected_intermediate_width)
+                * dtype_bytes
+            )
+            moe_routing_workspace_bytes = (
+                packed_slots * 4 + assignments * (8 + 8)
+            )
+            moe_execution_schedule = "dynamic_selected_block_batched"
+            moe_packed_assignment_slots = packed_slots
+            moe_weight_replication_avoided_bytes = max(
+                0,
+                (
+                    assignments - maximum_assignment_blocks
+                ) * per_assignment_weights * dtype_bytes,
             )
         elif dynamic_no_capacity:
             # Each expert owns one deterministic slot per token. This is an
@@ -873,7 +931,10 @@ def plan_execution(
             moe_execution_schedule == "expert_capacity_bucketed"
         )
         dynamic_no_capacity = (
-            moe_execution_schedule == "dynamic_native_expert_bucketed"
+            moe_execution_schedule in {
+                "dynamic_selected_block_batched",
+                "dynamic_native_expert_bucketed",
+            }
         )
         sparse_geometry_qualified = (
             descriptor.dtype == "bfloat16"

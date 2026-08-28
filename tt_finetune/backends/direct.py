@@ -891,6 +891,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 expected_backend = {
                     "assignment_weight_gather": "safe",
                     "expert_capacity_bucketed": "sparse",
+                    "dynamic_selected_block_batched": "dynamic",
                     "dynamic_native_expert_bucketed": "dynamic",
                 }[candidate.moe_schedule]
                 if (
@@ -1641,13 +1642,17 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
     def _export(self, resolved: Path, output: str) -> None:
         config = yaml.safe_load(resolved.read_text(encoding="utf-8"))
         script = Path(__file__).resolve().parents[2] / "blackhole_training" / "export_peft_adapter.py"
+        metadata_base_model = self.model.name_or_path
+        metadata_base_path = Path(metadata_base_model).expanduser()
+        if metadata_base_path.exists():
+            metadata_base_model = str(metadata_base_path.resolve())
         arguments = [
             "python",
             str(script),
             "--base-model",
             config["model_name"],
             "--metadata-base-model",
-            self.model.name_or_path,
+            metadata_base_model,
             "--checkpoint",
             f"{output}/checkpoints/final_model.pth",
             "--output",
@@ -1757,8 +1762,10 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 "peft_execution_strategy": selected.peft_strategy,
                 "moe_execution_strategy": (
                     "dynamic"
-                    if selected.moe_schedule
-                    == "dynamic_native_expert_bucketed"
+                    if selected.moe_schedule in {
+                        "dynamic_selected_block_batched",
+                        "dynamic_native_expert_bucketed",
+                    }
                     else "sparse"
                     if selected.moe_schedule == "expert_capacity_bucketed"
                     else "safe"
@@ -2242,11 +2249,15 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                     if enabled
                 ]
                 lora_plus_ratio = adapter_config.lora_plus_lr_ratio
+            exported_base_model = self.model.name_or_path
+            exported_base_path = Path(exported_base_model).expanduser()
+            if exported_base_path.exists():
+                exported_base_model = str(exported_base_path.resolve())
             (adapter / "tt_finetune_training.json").write_text(
                 json.dumps(
                     {
                         "format": "tt-finetune-training-metadata-v1",
-                        "base_model_name_or_path": self.model.name_or_path,
+                        "base_model_name_or_path": exported_base_model,
                         "base_model_revision": self.model.revision,
                         "requested_memory_mode": self.args.memory_mode,
                         "selected_frozen_weight_dtype": memory_report.get(

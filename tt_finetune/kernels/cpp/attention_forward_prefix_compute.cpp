@@ -232,6 +232,40 @@ FORCE_INLINE void transpose_bf16_tiles_to_fp32(
     output.push_back(tiles);
 }
 
+FORCE_INLINE void reorder_bf16_tiles_to_fp32_for_transposed_matmul(
+    uint32_t input_id, uint32_t output_id,
+    uint32_t row_tiles, uint32_t column_tiles) {
+    // Match transpose_b=True in TTNN's matmul reader: reorder the matrix into
+    // K-major tile order, but leave each tile untransposed.  matmul_init(...,
+    // true) performs the within-tile transpose in the unpack path.  A
+    // standalone transpose_tile is logically equivalent but changes the
+    // Blackhole dot-product issue schedule and therefore the FP32 QK bits.
+    const uint32_t tiles = row_tiles * column_tiles;
+    CircularBuffer input(input_id), output(output_id);
+    input.wait_front(tiles); output.reserve_back(tiles);
+    compute_kernel_hw_startup(input_id, output_id);
+    copy_tile_to_dst_init_short(input_id);
+    for (uint32_t column = 0; column < column_tiles; ++column) {
+        for (uint32_t row = 0; row < row_tiles; ++row) {
+            const uint32_t source = row * column_tiles + column;
+            const uint32_t target = column * row_tiles + row;
+            tile_regs_acquire();
+            copy_tile(input_id, source, 0);
+            typecast_tile_init<
+                static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float16_b),
+                static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32)>();
+            typecast_tile<
+                static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float16_b),
+                static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32)>(0);
+            tile_regs_commit(); tile_regs_wait();
+            PACK((pack_reconfig_data_format(output_id)));
+            pack_tile<true>(0, output_id, target);
+            tile_regs_release();
+        }
+    }
+    output.push_back(tiles);
+}
+
 template <bool Multiply>
 FORCE_INLINE void fp32_binary_tiles(
     uint32_t left_id, uint32_t right_id, uint32_t output_id,
@@ -262,6 +296,7 @@ FORCE_INLINE void fp32_binary_tiles(
 }  // namespace
 
 void kernel_main() {
+    WAYPOINT("AFC0");
     constexpr uint32_t cb_q = 0, cb_q_cos = 1, cb_q_sin = 2;
     constexpr uint32_t cb_k = 3, cb_k_cos = 4, cb_k_sin = 5;
     constexpr uint32_t cb_q_cos_product = 6, cb_q_sin_product = 7;
@@ -320,7 +355,7 @@ void kernel_main() {
     constexpr uint32_t cb_raw_score_fp32 = 23, cb_qk_partial_fp32 = 30;
     constexpr uint32_t cb_score_scale_fp32 = 28;
     bf16_tiles_to_fp32(cb_q_rotated, cb_q_fp32, dim_tiles);
-    transpose_bf16_tiles_to_fp32(
+    reorder_bf16_tiles_to_fp32_for_transposed_matmul(
         cb_k_rotated, cb_kt_fp32, seq_tiles, dim_tiles);
     CircularBuffer qrot(cb_q_rotated), krot(cb_k_rotated);
     qrot.pop_front(dim_tiles); krot.pop_front(vector_tiles);
@@ -366,44 +401,75 @@ void kernel_main() {
     q32.pop_front(dim_tiles);
     kt32.pop_front(vector_tiles);
 
+    // The accepted all-DRAM QK selects TTNN's 2-D large-block factory with
+    // in0_block_w=1.  With two K tiles it packs the first FP32 partial to L1,
+    // reloads it into DEST, then issues the second block and packs the final
+    // FP32 tile.  Keeping both K products invisibly in DEST is mathematically
+    // equivalent but not bit-exact on Blackhole.
     compute_kernel_hw_startup<SrcOrder::Reverse>(
-        cb_q_fp32, cb_kt_fp32, cb_raw_score_fp32);
-    // The canonical no-program-config TTNN path selects the simple ``bmm``
-    // factory.  Its compute kernel initializes ``matmul_tiles`` once, keeps
-    // the complete K reduction in one destination register and packs only the
-    // final FP32 tile.  ``matmul_block`` is mathematically equivalent here but
-    // uses a different LLK schedule and is observably non-exact on Blackhole.
-    // Mirror bmm.cpp literally: matmul_init followed by one matmul_tiles call
-    // for each K tile.
-    matmul_init(cb_q_fp32, cb_kt_fp32);
+        cb_q_fp32, cb_kt_fp32, cb_qk_partial_fp32);
+    matmul_block_init(
+        cb_q_fp32, cb_kt_fp32, true, 1, 1, 1);
+    CircularBuffer qk_partial(cb_qk_partial_fp32);
     for (uint32_t n = 0; n < seq_tiles; ++n) {
-        tile_regs_acquire();
         for (uint32_t phase = 0; phase < dim_tiles; ++phase) {
+            tile_regs_acquire();
+            if (phase > 0) {
+                copy_tile_to_dst_init_short_with_dt(
+                    cb_kt_fp32, cb_qk_partial_fp32);
+                qk_partial.wait_front(1);
+                copy_block_matmul_partials(
+                    cb_qk_partial_fp32, 0, 0, 1);
+                qk_partial.pop_front(1);
+                reconfig_data_format_srca(
+                    cb_qk_partial_fp32, cb_kt_fp32);
+                matmul_block_init(
+                    cb_q_fp32, cb_kt_fp32, true, 1, 1, 1);
+            }
             q32.wait_front(1);
             kt32.wait_front(1);
-            matmul_tiles(cb_q_fp32, cb_kt_fp32, 0, 0, 0);
+            matmul_block(
+                cb_q_fp32, cb_kt_fp32, 0, 0, 0,
+                true, 1, 1, 1);
             q32.pop_front(1);
             kt32.pop_front(1);
+            tile_regs_commit();
+            const bool last = phase + 1 == dim_tiles;
+            if (last) raw_score.reserve_back(1);
+            else qk_partial.reserve_back(1);
+            tile_regs_wait();
+            const uint32_t target =
+                last ? cb_raw_score_fp32 : cb_qk_partial_fp32;
+            PACK((pack_reconfig_data_format(target)));
+            pack_tile_block(0, target, 1);
+            tile_regs_release();
+            if (last) raw_score.push_back(1);
+            else qk_partial.push_back(1);
         }
-        tile_regs_commit();
-        raw_score.reserve_back(1);
-        tile_regs_wait();
-        // ``compute_kernel_hw_startup`` already configured the packer for
-        // the FP32 output.  Keep the canonical bmm.cpp pack boundary too:
-        // one ordinary pack_tile, without a per-output reconfiguration or
-        // block-pack helper.
-        pack_tile(0, cb_raw_score_fp32);
-        tile_regs_release();
-        raw_score.push_back(1);
     }
-#if @PUBLISH_RAW_SCORE_CHECKPOINT@
-    // The writer copies CB23's exact bytes directly to the private arena and
-    // publishes one CB16 credit when its NoC write barrier completes.  Wait
-    // for that credit before the multiply below consumes and pops raw_score.
+#if @PUBLISH_RAW_SCORE_CHECKPOINT@ && !@CANONICAL_POW2_SCALE@
+    // The writer copies CB23's exact bytes into the checkpoint arena.  CB16
+    // is unused by this FP32 prefix and carries one completion credit so the
+    // compute RISC cannot consume/recycle raw_score during that NoC write.
     CircularBuffer raw_checkpoint_ack(cb_scaled);
     raw_checkpoint_ack.wait_front(1);
     raw_checkpoint_ack.pop_front(1);
 #endif
+    WAYPOINT("AFC1");
+#if @CANONICAL_POW2_SCALE@
+    // The data-movement RISC reproduces TTNN's raw FP32 scalar-multiply bits
+    // in place in CB23. CB16 is only a completion credit. Keeping compute as
+    // CB23's consumer preserves the unpack counter for its later exponential
+    // FIFO epoch.
+    CircularBuffer scale_complete_ack(16);
+    scale_complete_ack.wait_front(1);
+    scale_complete_ack.pop_front(1);
+    bf16_tiles_to_fp32(cb_mask, cb_q_fp32, seq_tiles);
+    CircularBuffer mask_bf16(cb_mask); mask_bf16.pop_front(seq_tiles);
+    fp32_binary_tiles<false>(
+        cb_raw_score_fp32, cb_q_fp32, cb_masked, seq_tiles, false);
+    WAYPOINT("AFC2");
+#else
     // Match TTNN's explicit FP32 multiply, BF16->FP32 mask conversion and
     // FP32 add operations. A scalar SFPU shortcut rounds differently.
     fp32_binary_tiles<true>(
@@ -413,17 +479,26 @@ void kernel_main() {
     CircularBuffer mask_bf16(cb_mask); mask_bf16.pop_front(seq_tiles);
     fp32_binary_tiles<false>(
         cb_kt_fp32, cb_q_fp32, cb_masked, seq_tiles, false);
+    WAYPOINT("AFC2");
     CircularBuffer score_scale(cb_score_scale_fp32);
     score_scale.pop_front(1);
+#endif
 #else
     CircularBuffer krot(cb_k_rotated), kt(cb_kt);
     krot.wait_front(vector_tiles); kt.reserve_back(vector_tiles);
-    transpose_init(cb_k_rotated);
+    // The TTNN BMM reader reorders K into K-major blocks but deliberately
+    // leaves each tile untransposed; IN1_TRANSPOSE_TILE performs the tile
+    // transpose inside the matmul unpack path.  Materializing K^T with the
+    // standalone transpose kernel changes the LLK dot-product issue schedule
+    // even though the logical BF16 values compare equal.
+    compute_kernel_hw_startup(cb_k_rotated, cb_kt);
     for (uint32_t dim = 0; dim < dim_tiles; ++dim) {
         for (uint32_t token = 0; token < seq_tiles; ++token) {
             const uint32_t source = token * dim_tiles + dim;
             const uint32_t target = dim * seq_tiles + token;
-            tile_regs_acquire(); transpose_tile(cb_k_rotated, source, 0);
+            tile_regs_acquire();
+            copy_tile_init(cb_k_rotated);
+            copy_tile(cb_k_rotated, source, 0);
             tile_regs_commit(); tile_regs_wait();
             PACK((pack_reconfig_data_format(cb_kt)));
             pack_tile<true>(0, cb_kt, target); tile_regs_release();
@@ -434,30 +509,43 @@ void kernel_main() {
     CircularBuffer qrot(cb_q_rotated), score(cb_score), partial(cb_qk_partial);
     qrot.wait_front(dim_tiles); kt.wait_front(vector_tiles);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_rotated, cb_kt, cb_score);
-    for (uint32_t n = 0; n < seq_tiles; ++n) {
-        for (uint32_t phase = 0; phase < dim_tiles; ++phase) {
-            tile_regs_acquire();
-            if (phase > 0) {
-                copy_tile_to_dst_init_short_with_dt(cb_kt, cb_qk_partial);
-                partial.wait_front(1);
-                copy_block_matmul_partials(cb_qk_partial, 0, 0, 1);
-                partial.pop_front(1);
-                reconfig_data_format_srca(cb_qk_partial, cb_kt);
-            }
-            matmul_block_init(cb_q_rotated, cb_kt, false, 1, 1, 1);
-            matmul_block(
-                cb_q_rotated, cb_kt, phase, phase * seq_tiles + n,
-                0, false, 1, 1, 1);
-            tile_regs_commit();
-            const bool last = phase + 1 == dim_tiles;
-            if (last) score.reserve_back(1); else partial.reserve_back(1);
-            tile_regs_wait();
-            const uint32_t target = last ? cb_score : cb_qk_partial;
-            PACK((pack_reconfig_data_format(target)));
-            pack_tile_block(0, target, 1);
-            tile_regs_release();
-            if (last) score.push_back(1); else partial.push_back(1);
+    // TTNN lowers this [1, S, D] x [1, D, S] product through the large-block
+    // BMM kernel.  Its all-DRAM geometry uses one K tile per inner block: the
+    // first block is packed to an FP32 intermediate CB, reloaded into DEST,
+    // and the final block is packed once to BF16 output.  The old resident
+    // implementation used a BF16 partial; keeping both blocks invisibly in
+    // DEST is also observably different because the TT math accumulator has
+    // more internal state than a packed FP32 tile.  Preserve TTNN's explicit
+    // FP32 checkpoint while retaining all four score columns as one resident
+    // sub-block.
+    for (uint32_t phase = 0; phase < dim_tiles; ++phase) {
+        tile_regs_acquire();
+        if (phase > 0) {
+            copy_tile_to_dst_init_short_with_dt(cb_kt, cb_qk_partial);
+            partial.wait_front(seq_tiles);
+            copy_block_matmul_partials(
+                cb_qk_partial, 0, 0, seq_tiles);
+            partial.pop_front(seq_tiles);
+            reconfig_data_format_srca(cb_qk_partial, cb_kt);
         }
+        matmul_block_init(
+            cb_q_rotated, cb_kt, true,
+            seq_tiles, 1, 1);
+        matmul_block(
+            cb_q_rotated, cb_kt,
+            phase, phase * seq_tiles, 0,
+            true, seq_tiles, 1, 1);
+        tile_regs_commit();
+        const bool last = phase + 1 == dim_tiles;
+        if (last) score.reserve_back(seq_tiles);
+        else partial.reserve_back(seq_tiles);
+        tile_regs_wait();
+        const uint32_t target = last ? cb_score : cb_qk_partial;
+        PACK((pack_reconfig_data_format(target)));
+        pack_tile_block(0, target, seq_tiles);
+        tile_regs_release();
+        if (last) score.push_back(seq_tiles);
+        else partial.push_back(seq_tiles);
     }
     qrot.pop_front(dim_tiles); kt.pop_front(vector_tiles);
 

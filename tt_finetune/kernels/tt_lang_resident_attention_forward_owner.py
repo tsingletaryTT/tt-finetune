@@ -298,6 +298,7 @@ def build_tt_lang_resident_attention_forward_owner(
     canonical_grouped_qkv_rank: bool = False,
     canonical_separate_qkv_rank: bool = False,
     exact_attention_tail: bool = False,
+    fused_exact_attention_owner: bool = False,
     canonical_bf16_attention: bool = False,
     base_k_tiles_per_phase: int = 1,
     o_lora_k_tiles_per_phase: int | None = None,
@@ -322,6 +323,18 @@ def build_tt_lang_resident_attention_forward_owner(
             "separate canonical Q/K/V rank prefixes require the biasless "
             "exact attention tail"
         )
+    if fused_exact_attention_owner and not exact_attention_tail:
+        raise ValueError(
+            "fused exact attention ownership requires the exact attention contract"
+        )
+    if fused_exact_attention_owner and canonical_bf16_attention:
+        raise ValueError(
+            "the fused exact attention owner currently implements the captured "
+            "BF16-boundary/FP32-softmax contract"
+        )
+    outer_exact_tail = bool(
+        exact_attention_tail and not fused_exact_attention_owner
+    )
     if "TT_FINETUNE_O_RANK_K_PHASE" in os.environ:
         canonical_rank_k_tiles_per_phase = int(
             os.environ["TT_FINETUNE_O_RANK_K_PHASE"]
@@ -344,12 +357,12 @@ def build_tt_lang_resident_attention_forward_owner(
         "TT_FINETUNE_EXACT_TAIL_STAGE", "full"
     ).strip().lower()
     if exact_tail_stage not in {
-        "full", "prefix", "tail", "native", "probpack", "headpack",
+        "full", "prefix", "raw", "scale", "tail", "native", "probpack", "headpack",
         "rankpack",
     }:
         raise ValueError(
             "TT_FINETUNE_EXACT_TAIL_STAGE must be one of "
-            "'full', 'prefix', 'tail', 'native', 'probpack', 'headpack' "
+            "'full', 'prefix', 'raw', 'scale', 'tail', 'native', 'probpack', 'headpack' "
             "or 'rankpack'"
         )
 
@@ -373,6 +386,9 @@ def build_tt_lang_resident_attention_forward_owner(
         lora_scale=lora_scale,
         attention_scale=attention_scale,
         base_k_tiles_per_phase=base_k_tiles_per_phase,
+        lora_k_tiles_per_phase=(
+            2 if fused_exact_attention_owner else None
+        ),
         o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
         has_bias=has_bias,
         bias_after_bf16_base=bias_after_bf16_base,
@@ -387,18 +403,33 @@ def build_tt_lang_resident_attention_forward_owner(
         # reduction tree once the operands become private L1 tensors.  The
         # exact outer owner consumes the Q/K checkpoints directly and runs
         # the explicitly pinned canonical QK schedule below instead.
-        publish_raw_score_checkpoint=False,
+        publish_raw_score_checkpoint=(
+            os.environ.get(
+                "TT_FINETUNE_PUBLISH_RAW_ATTENTION_SCORE", "0"
+            ) == "1"
+        ),
         # The canonical outer owner recomputes the exact attention core and O
         # projection from the resident Q/K/V checkpoints.  Running the legacy
         # attention tail and O inside the prefix child was pure duplicate
         # work.  Compile the child as Q/K/V -> RoPE only and retain the same
         # private arena handoff.
         projection_rope_prefix_only=(
-            exact_attention_tail
+            outer_exact_tail
             and os.environ.get(
                 "TT_FINETUNE_PROJECTION_ROPE_PREFIX_ONLY", "1"
             ) != "0"
         ),
+        canonical_moreh_softmax=(
+            (outer_exact_tail or fused_exact_attention_owner)
+            and os.environ.get(
+                "TT_FINETUNE_CANONICAL_MOREH_SOFTMAX", "0"
+            ) == "1"
+        ),
+        # The accepted resident model path promotes RoPE Q/K before QK and
+        # keeps the raw score in FP32.  The fused owner must retain that same
+        # public numerical contract; the BF16-boundary variant is a distinct
+        # isolated attention contract and cannot be substituted here.
+        fp32_canonical_attention=fused_exact_attention_owner,
     )
     grouped_rank = (
         build_tt_lang_grouped_qkv_rank_path(
@@ -451,7 +482,7 @@ def build_tt_lang_resident_attention_forward_owner(
             head_dim=head_dim,
             scale=attention_scale,
         )
-        if exact_attention_tail and not canonical_bf16_attention else None
+        if outer_exact_tail and not canonical_bf16_attention else None
     )
     bf16_l1_tensor_indices = (
         (0, 1, 3)
@@ -471,7 +502,7 @@ def build_tt_lang_resident_attention_forward_owner(
             ),
             l1_tensor_indices=bf16_l1_tensor_indices,
         )
-        if exact_attention_tail and canonical_bf16_attention else None
+        if outer_exact_tail and canonical_bf16_attention else None
     )
     native_qk = (
         build_tt_lang_native_qk_prefix(
@@ -480,7 +511,7 @@ def build_tt_lang_resident_attention_forward_owner(
             kv_heads=kv_heads,
             head_dim=head_dim,
         )
-        if exact_attention_tail and not canonical_bf16_attention else None
+        if outer_exact_tail and not canonical_bf16_attention else None
     )
     probability_pack = (
         build_raw_fp32_checkpoint_pack(
@@ -490,7 +521,27 @@ def build_tt_lang_resident_attention_forward_owner(
             arena_columns=attention.output_shape[1],
             page_offset=probability_page,
         )
-        if exact_attention_tail else None
+        if outer_exact_tail else None
+    )
+    debug_stable_fp32_head = bool(
+        outer_exact_tail
+        and not canonical_bf16_attention
+        and os.environ.get(
+            "TT_FINETUNE_DEBUG_PUBLISH_STABLE_FP32_HEAD", "0"
+        ) == "1"
+    )
+    fp32_head_pack = (
+        build_raw_fp32_checkpoint_pack(
+            rows=query_heads * sequence_length,
+            columns=head_dim,
+            arena_rows=attention.output_shape[0],
+            arena_columns=attention.output_shape[1],
+            # Diagnostic-only: replace the first half of the probability
+            # checkpoint after its normal publication. The run terminates at
+            # the layer checkpoint, so no training consumer observes this.
+            page_offset=probability_page,
+        )
+        if debug_stable_fp32_head else None
     )
     exact_scale = (
         build_fp32_pow2_scale(
@@ -500,12 +551,12 @@ def build_tt_lang_resident_attention_forward_owner(
             canonical_ttnn_multiply=True,
         )
         if (
-            exact_attention_tail
+            outer_exact_tail
             and not canonical_bf16_attention
             and attention_scale == 0.125
         ) else None
     )
-    if exact_attention_tail and not canonical_bf16_attention and exact_scale is None:
+    if outer_exact_tail and not canonical_bf16_attention and exact_scale is None:
         raise ValueError(
             "the exact resident attention tail currently requires scale 0.125"
         )
@@ -514,28 +565,28 @@ def build_tt_lang_resident_attention_forward_owner(
             rows=sequence_length * kv_heads,
             columns=head_dim,
         )
-        if exact_attention_tail else None
+        if outer_exact_tail else None
     )
     query_copy = (
         build_tt_lang_owner_aligned_copy(
             rows=sequence_length * query_heads,
             columns=head_dim,
         )
-        if exact_attention_tail else None
+        if outer_exact_tail else None
     )
     key_copy = (
         build_tt_lang_owner_aligned_copy(
             rows=sequence_length * kv_heads,
             columns=head_dim,
         )
-        if exact_attention_tail else None
+        if outer_exact_tail else None
     )
     arena_copy = (
         build_tt_lang_owner_aligned_copy(
             rows=attention.output_shape[0],
             columns=attention.output_shape[1],
         )
-        if exact_attention_tail else None
+        if outer_exact_tail else None
     )
 
     @ttl.operation(grid="full")
@@ -583,6 +634,7 @@ def build_tt_lang_resident_attention_forward_owner(
         bf16_core,
         native_qk,
         probability_pack,
+        fp32_head_pack,
         exact_scale,
         query_copy,
         key_copy,
@@ -608,6 +660,28 @@ def build_tt_lang_resident_attention_forward_owner(
         int(canonical_grouped_qkv_rank)
         + 6 * int(canonical_separate_qkv_rank)
     )
+    fused_exact_internal_specs = (
+        ([{
+            "source_operand": 0,
+            "memory": "l1",
+            "shape": [sequence_length, 3 * logical_rank],
+        }] if canonical_grouped_qkv_rank else [])
+        + ([{
+            "source_operand": 0,
+            "memory": "l1",
+            "shape": [sequence_length, physical_rank],
+            "data_format": "BFloat16",
+            "layout": "tile",
+        } for _ in range(3)] if canonical_separate_qkv_rank else [])
+        + ([{
+            "source_operand": 0,
+            "memory": "l1",
+            "shape": [sequence_length, columns],
+            "data_format": "BFloat16",
+            "layout": "tile",
+        } for columns in (hidden_features, kv_features, kv_features)]
+           if canonical_separate_qkv_rank else [])
+    )
 
     variant = (
         f"{sequence_length}x{hidden_features}.kv{kv_features}."
@@ -618,12 +692,14 @@ def build_tt_lang_resident_attention_forward_owner(
         f"canonicalqvk{int(canonical_grouped_qkv_rank)}."
         f"separateqvk{int(canonical_separate_qkv_rank)}."
         f"exacttail{int(exact_attention_tail)}."
+        f"fusedexact{int(fused_exact_attention_owner)}."
         f"bf16core{int(canonical_bf16_attention)}."
         f"{('arenadram.' if exact_attention_tail and exact_tail_arena_memory == 'dram' else '')}"
         f"{('rawdram.' if exact_attention_tail and exact_tail_raw_memory == 'dram' else '')}"
         f"{((exact_tail_stage + 'only.') if exact_attention_tail and exact_tail_stage != 'full' else '')}"
+        f"debugfp32head{int(debug_stable_fp32_head)}."
         f"rankk{canonical_rank_k_tiles_per_phase}."
-        f"deps{dependency_digest}.v9"
+        f"deps{dependency_digest}.v10"
     )
 
     @tt_lang_operation(
@@ -670,7 +746,7 @@ def build_tt_lang_resident_attention_forward_owner(
         private_base = 22 + rank_prefix_programs
         private_arena_seed = (
             _compile_placeholder_like(t21, shape=attention.output_shape)
-            if exact_attention_tail else None
+            if outer_exact_tail else None
         )
         attention_tensors = list(tensors)
         if canonical_grouped_qkv_rank:
@@ -687,7 +763,7 @@ def build_tt_lang_resident_attention_forward_owner(
             attention_tensors[4] = separate_delta_seeds[0]
             attention_tensors[8] = separate_delta_seeds[1]
             attention_tensors[12] = separate_delta_seeds[2]
-        if exact_attention_tail:
+        if outer_exact_tail:
             attention_tensors[21] = private_arena_seed
         attention_child = compile_serialized_child(
             attention, tuple(attention_tensors)
@@ -779,7 +855,7 @@ def build_tt_lang_resident_attention_forward_owner(
                     if canonical_separate_qkv_rank
                     and index in {4, 8, 12}
                     else private_base
-                    if exact_attention_tail and index == 21
+                    if outer_exact_tail and index == 21
                     else index
                 )
             )
@@ -787,7 +863,7 @@ def build_tt_lang_resident_attention_forward_owner(
         }
         children.append(_remap_all(attention_child, attention_mapping))
 
-        if exact_attention_tail:
+        if outer_exact_tail:
             assert probability_pack is not None
             assert query_copy is not None
             assert key_copy is not None
@@ -868,6 +944,11 @@ def build_tt_lang_resident_attention_forward_owner(
             probability_flat_seed = _compile_placeholder_like(
                 t00,
                 shape=(query_heads * sequence_length, sequence_length),
+                dtype=torch.float32,
+            )
+            fp32_head_flat_seed = _compile_placeholder_like(
+                t00,
+                shape=(query_heads * sequence_length, head_dim),
                 dtype=torch.float32,
             )
             scaled_score_seed = _compile_placeholder_like(
@@ -1031,6 +1112,13 @@ def build_tt_lang_resident_attention_forward_owner(
                 probability_pack,
                 (probability_flat_seed, private_arena_seed),
             )
+            fp32_head_child = (
+                compile_serialized_child(
+                    fp32_head_pack,
+                    (fp32_head_flat_seed, private_arena_seed),
+                )
+                if fp32_head_pack is not None else None
+            )
             head_checkpoint_child = compile_serialized_child(
                 direct_copy,
                 (flat_head_source, flat_head_destination),
@@ -1124,7 +1212,25 @@ def build_tt_lang_resident_attention_forward_owner(
                 ),
                 *(_remap_all(child, native_map) for child in native_children),
                 _remap_all(
-                    probability_child, {0: probability_id, 1: arena_id}
+                    probability_child,
+                    {
+                        0: (
+                            raw_score_id
+                            if os.environ.get(
+                                "TT_FINETUNE_DEBUG_PUBLISH_STABLE_RAW_SCORE",
+                                "0",
+                            ) == "1"
+                            else probability_id
+                        ),
+                        1: arena_id,
+                    },
+                ),
+                *(
+                    [_remap_all(
+                        fp32_head_child,
+                        {0: tail_private_base + 7, 1: arena_id},
+                    )]
+                    if fp32_head_child is not None else []
                 ),
                 _remap_all(
                     head_checkpoint_child, {0: head4_id, 1: arena_id}
@@ -1147,6 +1253,8 @@ def build_tt_lang_resident_attention_forward_owner(
                 prefix_programs = 7 + rank_prefix_programs
                 retained_programs = {
                     "prefix": prefix_programs,
+                    "raw": prefix_programs,
+                    "scale": prefix_programs + 2,
                     "tail": prefix_programs + 10,
                     "native": prefix_programs + 10 + native_o.physical_programs,
                     "probpack": (
@@ -1159,9 +1267,31 @@ def build_tt_lang_resident_attention_forward_owner(
                         prefix_programs + 13 + native_o.physical_programs
                     ),
                 }[exact_tail_stage]
-                children = children[:retained_programs] + [
-                    _remap_all(final_arena_child, {0: arena_id, 1: 21})
-                ]
+                if exact_tail_stage in {"raw", "scale"}:
+                    if canonical_bf16_attention:
+                        raise ValueError(
+                            "scale boundary diagnostic requires the FP32 tail"
+                        )
+                    children = children[:retained_programs] + [
+                        _remap_all(
+                            probability_child,
+                            {
+                                0: (
+                                    raw_score_id
+                                    if exact_tail_stage == "raw"
+                                    else tail_private_base + 2
+                                ),
+                                1: arena_id,
+                            },
+                        ),
+                        _remap_all(
+                            final_arena_child, {0: arena_id, 1: 21}
+                        ),
+                    ]
+                else:
+                    children = children[:retained_programs] + [
+                        _remap_all(final_arena_child, {0: arena_id, 1: 21})
+                    ]
 
             score_shape = [
                 1, query_heads, sequence_length, sequence_length
@@ -1445,6 +1575,13 @@ def build_tt_lang_resident_attention_forward_owner(
                     arena_memory=exact_tail_arena_memory,
                     bf16_l1_tensor_indices=bf16_l1_tensor_indices,
                 )
+        elif fused_exact_attention_owner:
+            # The exact Q/K/V -> RoPE -> QK -> softmax -> P@V -> O path is
+            # already one physical TT-Metal child.  Only optional rank-prefix
+            # tensors belong to the composition layer; every attention
+            # intermediate remains in that child's CB/L1 allocation and the
+            # child writes the final checkpoint arena directly to tensor 21.
+            internal_tensors = fused_exact_internal_specs
         else:
             rank_seed = _compile_placeholder_like(
                 t00, shape=(sequence_length, physical_rank)
@@ -1550,6 +1687,8 @@ def build_tt_lang_resident_attention_forward_owner(
     # program.  Exact mode additionally relays Q/K from the private arena and
     # owns the four-program canonical QK schedule before the private tail.
     full_physical_programs = (
+        1 + rank_prefix_programs
+        if fused_exact_attention_owner else
         (
             (
                 1 + rank_prefix_programs
@@ -1566,11 +1705,13 @@ def build_tt_lang_resident_attention_forward_owner(
         )
         if exact_attention_tail else
         1 + rank_prefix_programs + 3 + native_o.physical_programs
-    )
-    if exact_attention_tail and exact_tail_stage != "full":
+    ) + int(debug_stable_fp32_head)
+    if outer_exact_tail and exact_tail_stage != "full":
         prefix_programs = 7 + rank_prefix_programs
         retained_programs = {
             "prefix": prefix_programs,
+            "raw": prefix_programs,
+            "scale": prefix_programs + 2,
             "tail": prefix_programs + 10,
             "native": prefix_programs + 10 + native_o.physical_programs,
             "probpack": prefix_programs + 11 + native_o.physical_programs,
@@ -1579,11 +1720,15 @@ def build_tt_lang_resident_attention_forward_owner(
         }[exact_tail_stage]
         # Stage diagnostics always append the final private-arena publication
         # after truncating the child sequence.
-        operation.physical_programs = retained_programs + 1
+        operation.physical_programs = retained_programs + (
+            2 if exact_tail_stage in {"raw", "scale"} else 1
+        )
     else:
         operation.physical_programs = full_physical_programs
     operation.public_custom_calls = 1
     operation.compiler_owned_l1_tensors = (
+        rank_prefix_programs
+        if fused_exact_attention_owner else
         (21 if canonical_bf16_attention else 24)
         + rank_prefix_programs
         if exact_attention_tail else
@@ -1598,6 +1743,8 @@ def build_tt_lang_resident_attention_forward_owner(
     operation.reverse_handoff_noc_bytes = attention.reverse_handoff_noc_bytes
     operation.safe_default = False
     operation.experimental_backend = (
+        "attention_forward_full_exact_fused_owner_v1"
+        if fused_exact_attention_owner else
         "attention_forward_full_canonical_qk_private_tail_v2"
         if exact_attention_tail else
         "attention_forward_canonical_qvk_o_v2"
@@ -1607,6 +1754,7 @@ def build_tt_lang_resident_attention_forward_owner(
     operation.canonical_grouped_qkv_rank = bool(canonical_grouped_qkv_rank)
     operation.canonical_separate_qkv_rank = bool(canonical_separate_qkv_rank)
     operation.exact_attention_tail = bool(exact_attention_tail)
+    operation.fused_exact_attention_owner = bool(fused_exact_attention_owner)
     operation.canonical_bf16_attention = bool(canonical_bf16_attention)
     operation.exact_tail_arena_memory = exact_tail_arena_memory
     operation.exact_tail_stage = exact_tail_stage
@@ -1626,7 +1774,7 @@ def build_tt_lang_resident_attention_forward_owner(
             arena_memory=exact_tail_arena_memory,
             bf16_l1_tensor_indices=bf16_l1_tensor_indices,
         )
-        if exact_attention_tail and canonical_bf16_attention else
+        if outer_exact_tail and canonical_bf16_attention else
         canonical_fp32_attention_owner_internal_specs(
             sequence_length=sequence_length,
             hidden_features=hidden_features,
@@ -1641,9 +1789,16 @@ def build_tt_lang_resident_attention_forward_owner(
             arena_memory=exact_tail_arena_memory,
             raw_memory=exact_tail_raw_memory,
         )
-        if exact_attention_tail else None
+        if outer_exact_tail else (
+            fused_exact_internal_specs
+            if fused_exact_attention_owner else None
+        )
     )
-    if exact_internal_specs is not None and canonical_separate_qkv_rank:
+    if (
+        outer_exact_tail
+        and exact_internal_specs is not None
+        and canonical_separate_qkv_rank
+    ):
         exact_internal_specs = [
             {
                 "source_operand": 0,

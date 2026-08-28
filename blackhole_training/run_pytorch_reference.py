@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 
+import torch
 import yaml
 
 
@@ -43,6 +44,15 @@ def _arguments() -> argparse.Namespace:
     )
     parser.add_argument("--logging-steps", type=int, default=10)
     parser.add_argument("--save-steps", type=int, default=500)
+    parser.add_argument(
+        "--moe-execution-strategy",
+        choices=("safe", "dynamic"),
+        default="safe",
+        help=(
+            "Use the ordinary Transformers MoE path or the same no-drop "
+            "dynamic expert owner as the TT candidate."
+        ),
+    )
     parser.add_argument(
         "--initial-adapter",
         type=Path,
@@ -232,7 +242,11 @@ def main() -> int:
     # TT-only graph/runtime controls must not leak into the reference path.
     payload["optimizer_layout"] = "per_parameter"
     payload["execution_graph_layout"] = "monolithic"
-    payload["lora_backend"] = "generic"
+    payload["lora_backend"] = (
+        "auto"
+        if arguments.moe_execution_strategy == "dynamic"
+        else "generic"
+    )
     payload["lora_resident_full_mlp_backward"] = False
     payload["lora_resident_output_attention_backward"] = False
 
@@ -245,6 +259,19 @@ def main() -> int:
 
     # The direct worker uses this superset config for every supported causal
     # LM family; architecture discovery still comes from the loaded model.
+    if str(payload.get("dtype")) in {"torch.bfloat16", "bfloat16", "bf16"}:
+        # Some x86 oneDNN builds advertise BF16 forward support but reject
+        # GELU backward at execution time.  The ordinary PyTorch kernels are
+        # a valid deterministic CPU authority, so probe once and disable only
+        # the unsupported acceleration path.  This does not affect TT runs.
+        probe = torch.ones(4, dtype=torch.bfloat16, requires_grad=True)
+        try:
+            torch.nn.functional.gelu(probe).sum().backward()
+        except RuntimeError as error:
+            if "DNNL does not support bf16/f16 backward" not in str(error):
+                raise
+            torch.backends.mkldnn.enabled = False
+
     from blacksmith.experiments.torch.qwen.configs import TrainingConfig
     from tt_finetune.worker import run
 
@@ -259,7 +286,7 @@ def main() -> int:
         optimizer_tile_packed=False,
         packed_gradient_clip=False,
         peft_execution_strategy="framework_safe",
-        moe_execution_strategy="safe",
+        moe_execution_strategy=arguments.moe_execution_strategy,
     )
     adapter_dir = _export_adapter(payload, output)
     metrics_path = output / "training_metrics.json"
@@ -274,6 +301,7 @@ def main() -> int:
         "status": "accepted" if accepted else "failed",
         "training_status": metrics.get("status"),
         "authority": "matched PyTorch/Transformers/PEFT CPU training",
+        "moe_execution_strategy": arguments.moe_execution_strategy,
         "source_config": str(reference_config_path),
         "source_config_sha256": _sha256(reference_config_path),
         "initial_adapter": payload.get("initial_adapter_path"),

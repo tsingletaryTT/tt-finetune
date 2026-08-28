@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import os
+from pathlib import Path
 from time import perf_counter
 from typing import Any, Sequence
 
@@ -374,6 +376,30 @@ class ResidentTrainingOps:
         final_hidden = self.executor.engine.forward_hidden(initial_hidden)
         self._device_barrier()
         self._record("resident_forward", phase_started)
+
+        diagnostic_path = os.environ.get(
+            "TT_FINETUNE_DEBUG_FORWARD_CHECKPOINT_PATH"
+        )
+        if diagnostic_path:
+            path = Path(diagnostic_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "initial_hidden": initial_hidden.detach().cpu(),
+                    "checkpoint_hidden": final_hidden.detach().cpu(),
+                    "checkpoint_arena": (
+                        self.executor.engine.checkpoints[0].detach().cpu()
+                    ),
+                    "checkpoint_layout": (
+                        self.executor.engine.diagnostic_forward_layout
+                    ),
+                    "logical_sequence_length": logical_sequence,
+                },
+                path,
+            )
+            raise RuntimeError(
+                f"resident forward checkpoint diagnostic captured at {path}"
+            )
 
         phase_started = perf_counter()
         loss, top_gradient = self.executor.edges.loss_and_top_gradient(

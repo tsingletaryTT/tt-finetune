@@ -63,17 +63,17 @@ trainer.train()
 
 ## Install
 
-The current binary release is `v0.2.0` for CPython 3.12 on Linux x86-64. Install
+The current binary release is `v0.2.1` for CPython 3.12 on Linux x86-64. Install
 the platform wheel directly from the GitHub Release:
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.0/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
+python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.1/tt_finetune-0.2.1-cp312-cp312-linux_x86_64.whl
 tt-finetune doctor --smoke
 ```
 
-Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/tag/v0.2.0>
+Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/latest>
 
 The platform wheel bundles the compatible TT-XLA/PJRT plugin, TTNN, TT-Metal
 user-space libraries, compiler/runtime libraries, Python bindings, custom ops,

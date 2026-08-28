@@ -14,6 +14,7 @@ qualified source/optimizer descriptor bundle.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -203,6 +204,7 @@ class ResidentStackEngine:
         diagnostic_top_attention_stage: str | None = None,
         backward_direct_public_checkpoints: bool | None = None,
         diagnostic_forward_separate_parameters: bool = False,
+        diagnostic_forward_checkpoint_layer: int | None = None,
     ) -> None:
         self.packed = packed
         self.device = device
@@ -264,6 +266,14 @@ class ResidentStackEngine:
             compact_forward=compact_forward,
             reuse_backward_scratch=True,
             execution_phase="forward",
+            debug_forward_checkpoint_only=(
+                diagnostic_forward_checkpoint_layer is not None
+            ),
+            debug_forward_checkpoint_layer=(
+                -1
+                if diagnostic_forward_checkpoint_layer is None
+                else diagnostic_forward_checkpoint_layer
+            ),
             debug_forward_checkpoint_separate_parameters=(
                 diagnostic_forward_separate_parameters
             ),
@@ -325,6 +335,16 @@ class ResidentStackEngine:
                 # ordinary per-projection LoRA schedule; only rank 8 uses the
                 # packed Q/V/K specialization.
                 "canonical_bf16_attention": False,
+                "fused_exact_attention_owner": (
+                    os.environ.get(
+                        "TT_FINETUNE_FUSED_EXACT_ATTENTION_OWNER", "0"
+                    ) == "1"
+                ),
+                "fused_exact_mlp_owner": (
+                    os.environ.get(
+                        "TT_FINETUNE_FUSED_EXACT_MLP_OWNER", "0"
+                    ) == "1"
+                ),
                 "canonical_grouped_qkv_rank": bool(
                     not shape.has_bias and shape.logical_rank == 8
                 ),
@@ -357,12 +377,50 @@ class ResidentStackEngine:
             **topology_forward_kwargs,
             **exact_forward_kwargs,
         )
-        final_layer = shape.layers - 1
-        final_page_offset = (
-            (final_layer // 2) * per_layer_forward.layer_allocated_pages
-            + per_layer_forward.layer_output_page_offset
+        final_layer = (
+            shape.layers - 1
+            if diagnostic_forward_checkpoint_layer is None
+            else diagnostic_forward_checkpoint_layer
         )
-        self.final_checkpoint_parity = final_layer % 2
+        diagnostic_checkpoint_stage = os.environ.get(
+            "TT_FINETUNE_DEBUG_FORWARD_CHECKPOINT_STAGE", "layer_output"
+        )
+        diagnostic_columns = shape.hidden_features
+        if (
+            diagnostic_forward_checkpoint_layer is not None
+            and diagnostic_checkpoint_stage != "layer_output"
+        ):
+            diagnostic_slice = per_layer_forward.forward_plan.arena.slice(
+                diagnostic_checkpoint_stage
+            )
+            if diagnostic_slice.pages_per_tile != 1:
+                raise ValueError(
+                    "forward checkpoint diagnostic cannot expose raw multi-page "
+                    f"tiles: {diagnostic_checkpoint_stage!r}"
+                )
+            sequence_tiles = shape.sequence_length // 32
+            if diagnostic_slice.logical_tiles % sequence_tiles:
+                raise ValueError(
+                    "forward checkpoint diagnostic stage is not token-major: "
+                    f"{diagnostic_checkpoint_stage!r}"
+                )
+            diagnostic_columns = (
+                diagnostic_slice.logical_tiles // sequence_tiles
+            ) * 32
+            diagnostic_page_offset = diagnostic_slice.page_offset
+        else:
+            diagnostic_page_offset = per_layer_forward.layer_output_page_offset
+        final_page_offset = (
+            (
+                (final_layer // 2) * per_layer_forward.layer_allocated_pages
+                if diagnostic_forward_checkpoint_layer is None else 0
+            )
+            + diagnostic_page_offset
+        )
+        self.final_checkpoint_parity = (
+            final_layer % 2
+            if diagnostic_forward_checkpoint_layer is None else 0
+        )
         self.layer_checkpoint_rows = per_layer_forward.output_shape[0]
         self.layer_checkpoint_columns = per_layer_forward.output_shape[1]
         self.layer_allocated_pages = per_layer_forward.layer_allocated_pages
@@ -371,9 +429,46 @@ class ResidentStackEngine:
         )
         self.final_hidden_copy = build_tt_lang_arena_page_copy(
             rows=shape.sequence_length,
-            columns=shape.hidden_features,
+            columns=diagnostic_columns,
             source_page_offset=final_page_offset,
         )
+        self.diagnostic_forward_checkpoint = (
+            diagnostic_forward_checkpoint_layer is not None
+        )
+        self.diagnostic_forward_checkpoint_columns = diagnostic_columns
+        self.diagnostic_forward_layout = {
+            "attention": {
+                region.name: {
+                    "page_offset": region.page_offset,
+                    "page_count": region.page_count,
+                    "logical_tiles": region.logical_tiles,
+                    "pages_per_tile": region.pages_per_tile,
+                    "dtype": region.dtype,
+                }
+                for region in per_layer_forward.forward_plan.arena.slices
+            },
+            "layer_output": {
+                "page_offset": per_layer_forward.layer_output_page_offset,
+                "page_count": (
+                    shape.sequence_length // 32
+                ) * (shape.hidden_features // 32),
+                "dtype": "bfloat16",
+            },
+            "mlp_gate": {
+                "page_offset": per_layer_forward.mlp_gate_page_offset,
+                "page_count": (
+                    shape.sequence_length // 32
+                ) * (shape.intermediate_features // 32),
+                "dtype": "bfloat16",
+            },
+            "mlp_up": {
+                "page_offset": per_layer_forward.mlp_up_page_offset,
+                "page_count": (
+                    shape.sequence_length // 32
+                ) * (shape.intermediate_features // 32),
+                "dtype": "bfloat16",
+            },
+        }
 
         bf16 = torch.bfloat16
         hidden_shape = (shape.sequence_length, shape.hidden_features)
@@ -437,7 +532,8 @@ class ResidentStackEngine:
             )
         ]
         self.final_hidden_output = _device_seed(
-            hidden_shape, dtype=bf16, device=device, nonce=22
+            (shape.sequence_length, diagnostic_columns),
+            dtype=bf16, device=device, nonce=22
         )
         self.gradient_output = _device_seed(
             packed.gradient_plan.physical_shape,
@@ -541,6 +637,12 @@ class ResidentStackEngine:
             self.final_hidden_output,
         )
         self.final_hidden_output = final_hidden
+        if self.diagnostic_forward_checkpoint:
+            return final_hidden.reshape(
+                initial_hidden.shape[0],
+                shape.sequence_length,
+                self.diagnostic_forward_checkpoint_columns,
+            )
         return final_hidden.reshape_as(initial_hidden)
 
     def backward_clip_adamw(

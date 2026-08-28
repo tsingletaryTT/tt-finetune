@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from typing import Any
 
 from torch import nn
@@ -129,9 +130,28 @@ def plan_and_install_architecture(
             "native streamed attention was requested outside its qualified "
             f"capability: {attention.reason}"
         )
-    if sequence_length > 128 and descriptor.qkv_projection_layout == "separate":
+    # Qualification-only reproduction switch.  Phi-1.5 B2/S128 proved that
+    # the native primitive is fast in isolation but regresses the synchronized
+    # full step and changes the numerical contract.  Keep this disabled and
+    # outside planner visibility until a reusable exact schedule exists.
+    experimental_short_streamed = (
+        os.environ.get("TT_FINETUNE_EXPERIMENTAL_SHORT_STREAMED_ATTENTION")
+        == "1"
+        and sequence_length >= 128
+        and descriptor.qkv_projection_layout == "separate"
+        and descriptor.dtype == "bfloat16"
+        and descriptor.head_dimension % 32 == 0
+        and sequence_length % 32 == 0
+    )
+    if (
+        sequence_length > 128
+        and descriptor.qkv_projection_layout == "separate"
+    ) or experimental_short_streamed:
         use_native = (
             attention.implementation == "native_streamed_causal"
+            and requested_attention_backend != "safe"
+        ) or (
+            experimental_short_streamed
             and requested_attention_backend != "safe"
         )
         attention_install = install_streamed_attention(
@@ -144,8 +164,10 @@ def plan_and_install_architecture(
         selected_moe_backend = (
             "dynamic"
             if requested_moe_backend == "auto"
-            and plan.moe_execution_schedule
-            == "dynamic_native_expert_bucketed"
+            and plan.moe_execution_schedule in {
+                "dynamic_selected_block_batched",
+                "dynamic_native_expert_bucketed",
+            }
             else
             "sparse"
             if requested_moe_backend == "auto"

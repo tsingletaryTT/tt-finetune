@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import os
 import re
 import struct
 from functools import lru_cache
@@ -450,6 +451,20 @@ def _layer_swiglu_down_compute_source() -> str:
         "constexpr uint32_t kCoreCount = 60;",
         1,
     ).replace(
+        # The standalone 110-core kernel partitions product and output work
+        # onto disjoint 38/72-core groups.  The resident 60-core continuation
+        # executes those phases serially on the same island.  Keeping the old
+        # 72-core output boundary after shrinking kCoreCount underflows
+        # kProductCoreCount and assigns zero SwiGLU products, leaving the
+        # reader and down reduction in a permanent CB3/CB5 cycle.
+        "constexpr uint32_t kOutputCoreCount = 72;\n"
+        "    constexpr uint32_t kProductCoreStart = kOutputCoreCount;\n"
+        "    constexpr uint32_t kProductCoreCount = kCoreCount - kOutputCoreCount;",
+        "constexpr uint32_t kOutputCoreCount = kCoreCount;\n"
+        "    constexpr uint32_t kProductCoreStart = 0;\n"
+        "    constexpr uint32_t kProductCoreCount = kCoreCount;",
+        1,
+    ).replace(
         "get_absolute_logical_y() * 11 + get_absolute_logical_x()",
         "get_absolute_logical_y() * 6 + (get_absolute_logical_x() - 5)",
         1,
@@ -543,7 +558,9 @@ def _layer_swiglu_down_compute_source() -> str:
         1,
     )
     activation_end = (
-        "    // The explicit BF16 helpers configure the three Tensix threads"
+        "    if (valid_products != 0) {\n"
+        "        enable_fp32_dest_acc();\n"
+        "    }\n"
     )
     if source.count(activation_end) != 1:
         raise RuntimeError("SwiGLU/down activation end marker changed")
@@ -552,13 +569,112 @@ def _layer_swiglu_down_compute_source() -> str:
         "    }\n" + activation_end,
         1,
     )
+    # In the decomposed schedule CB17/CB18 contain gate/up only until the
+    # activation phase consumes them.  The down reader then distributes the
+    # rounded SwiGLU product into CB5.  The standalone kernel's split-core
+    # schedule aliases additional product views onto gate/up; the resident
+    # 60-core schedule does not.  Read both H and frozen-base reductions from
+    # the one resident product window and acknowledge it once at the existing
+    # final pop.  This preserves the exact K traversal while avoiding two
+    # extra L1 copies of every product tile.
+    product_source_rewrites = (
+        (
+            "        compute_kernel_hw_startup<SrcOrder::Reverse>(\n"
+            "            cb_gate, cb_a, cb_h_partial);",
+            "        const uint32_t h_product_source = paired_swiglu\n"
+            "            ? cb_gate : cb_product_resident;\n"
+            "        compute_kernel_hw_startup<SrcOrder::Reverse>(\n"
+            "            h_product_source, cb_a, cb_h_partial);",
+        ),
+        (
+            "        matmul_block_init(\n"
+            "            cb_gate, cb_a, true, 1, 1, h_k_block_tiles);",
+            "        matmul_block_init(\n"
+            "            h_product_source, cb_a, true, 1, 1,\n"
+            "            h_k_block_tiles);",
+        ),
+        (
+            "            h_x.wait_front(h_k_block_tiles);",
+            "            if constexpr (paired_swiglu)\n"
+            "                h_x.wait_front(h_k_block_tiles);",
+        ),
+        (
+            "                    matmul_block(\n"
+            "                        cb_gate,\n"
+            "                        cb_a,\n"
+            "                        inner,\n"
+            "                        rank * h_k_block_tiles + inner,",
+            "                    const uint32_t product_tile = paired_swiglu\n"
+            "                        ? inner\n"
+            "                        : local * i_tiles\n"
+            "                            + block * h_k_block_tiles + inner;\n"
+            "                    matmul_block(\n"
+            "                        h_product_source,\n"
+            "                        cb_a,\n"
+            "                        product_tile,\n"
+            "                        rank * h_k_block_tiles + inner,",
+        ),
+        (
+            "            h_x.pop_front(h_k_block_tiles);",
+            "            if constexpr (paired_swiglu)\n"
+            "                h_x.pop_front(h_k_block_tiles);",
+        ),
+        (
+            "        compute_kernel_hw_startup<SrcOrder::Reverse>(\n"
+            "            cb_up, cb_w, cb_base_partial);",
+            "        const uint32_t base_product_source = paired_swiglu\n"
+            "            ? cb_up : cb_product_resident;\n"
+            "        compute_kernel_hw_startup<SrcOrder::Reverse>(\n"
+            "            base_product_source, cb_w, cb_base_partial);",
+        ),
+        (
+            "        matmul_block_init(\n"
+            "            cb_up, cb_w, false, 1, 1,\n"
+            "            base_k_block_tiles);",
+            "        matmul_block_init(\n"
+            "            base_product_source, cb_w, false, 1, 1,\n"
+            "            base_k_block_tiles);",
+        ),
+        (
+            "            base_x.wait_front(base_k_block_tiles);",
+            "            if constexpr (paired_swiglu)\n"
+            "                base_x.wait_front(base_k_block_tiles);",
+        ),
+        (
+            "                matmul_block(\n"
+            "                    cb_up,\n"
+            "                    cb_w,\n"
+            "                    inner,\n"
+            "                    inner,",
+            "                const uint32_t product_tile = paired_swiglu\n"
+            "                    ? inner\n"
+            "                    : local * i_tiles\n"
+            "                        + block * base_k_block_tiles + inner;\n"
+            "                matmul_block(\n"
+            "                    base_product_source,\n"
+            "                    cb_w,\n"
+            "                    product_tile,\n"
+            "                    inner,",
+        ),
+        (
+            "            base_x.pop_front(base_k_block_tiles);",
+            "            if constexpr (paired_swiglu)\n"
+            "                base_x.pop_front(base_k_block_tiles);",
+        ),
+    )
+    for marker, replacement in product_source_rewrites:
+        if source.count(marker) != 1:
+            raise RuntimeError(
+                "resident down-product source schedule changed: "
+                + marker.splitlines()[0].strip()
+            )
+        source = source.replace(marker, replacement, 1)
     phase_markers = {
         "    for (uint32_t local = 0; local < valid_products; ++local) {\n":
             "    WAYPOINT(\"DCA0\");\n"
             "    for (uint32_t local = 0; local < valid_products; ++local) {\n",
-        "    // The explicit BF16 helpers configure the three Tensix threads":
-            "    WAYPOINT(\"DCA1\");\n"
-            "    // The explicit BF16 helpers configure the three Tensix threads",
+        activation_end:
+            "    WAYPOINT(\"DCA1\");\n" + activation_end,
         "    if (valid_outputs != 0) {\n"
         "        product_resident.wait_front(valid_outputs * i_tiles);\n"
         "    }\n":
@@ -672,10 +788,16 @@ def _append_gate_up_compute_helpers(source: str) -> str:
     return source[:kernel] + _layer_gate_up_compute_source() + source[kernel:]
 
 
-def _append_full_mlp_compute_helpers(source: str) -> str:
+def _append_full_mlp_compute_helpers(
+    source: str, *, decomposed_activation: bool = False,
+) -> str:
     kernel = _kernel_declaration_start(source)
     helpers = (
-        _layer_paired_gate_up_swiglu_compute_source()
+        (
+            _layer_gate_up_compute_source()
+            if decomposed_activation
+            else _layer_paired_gate_up_swiglu_compute_source()
+        )
         + _layer_swiglu_down_compute_source()
     )
     return (
@@ -1852,6 +1974,7 @@ def build_tt_lang_attention_forward_qkv_resident(
     resident_gate_up_intermediate_features: int | None = None,
     resident_gate_up_base_k_tiles_per_phase: int = 1,
     resident_full_mlp_forward: bool = False,
+    resident_full_mlp_decomposed: bool = False,
     resident_down_base_k_tiles_per_phase: int = 1,
     hidden_page_base: int = 0,
     publish_layer_output_at_page_zero: bool = False,
@@ -1860,6 +1983,8 @@ def build_tt_lang_attention_forward_qkv_resident(
     dedicated_o_rank_producer: bool = False,
     publish_raw_score_checkpoint: bool = False,
     projection_rope_prefix_only: bool = False,
+    canonical_moreh_softmax: bool = False,
+    fp32_canonical_attention: bool = False,
 ) -> Callable:
     plan = plan_full_attention_forward(
         tokens=sequence_length,
@@ -1937,10 +2062,15 @@ def build_tt_lang_attention_forward_qkv_resident(
         raise ValueError("post-attention diagnostic stage requires block ownership")
     resident_gate_up = resident_gate_up_intermediate_features is not None
     full_mlp_forward = bool(resident_full_mlp_forward)
+    full_mlp_decomposed = bool(resident_full_mlp_decomposed)
     if hidden_page_base < 0:
         raise ValueError("hidden page base must be non-negative")
     if full_mlp_forward and not resident_gate_up:
         raise ValueError("resident full MLP requires resident gate/up")
+    if full_mlp_decomposed and not full_mlp_forward:
+        raise ValueError(
+            "decomposed resident MLP requires resident_full_mlp_forward"
+        )
     if resident_gate_up and not post_attention_block:
         raise ValueError(
             "resident gate/up requires the post-attention RMSNorm owner"
@@ -1982,10 +2112,12 @@ def build_tt_lang_attention_forward_qkv_resident(
     total_cbs = 64 if input_rmsnorm else _TOTAL_CBS
     artifact_total_cbs = total_cbs + (4 if dedicated_o_rank_producer else 0)
     projection_workers = 45 if dedicated_o_rank_producer else 50
-    # TTNN's full-graph LoRA rank projection selects a one-K-tile spill for
-    # SmolLM2's 576-wide rank-8 geometry and the previously qualified
-    # two-K-tile spill for the wider rank-16/Qwen geometry. This is an
-    # observable BF16 contract, not an interchangeable tuning choice.
+    # The accepted resident multi-layer contract uses a one-K-tile spill for
+    # SmolLM2's 576-wide rank-8 projection and two K tiles for wider/rank-16
+    # geometries.  A newer directly materialized attention oracle uses two K
+    # tiles for Smol as well, but that is a different numerical contract and
+    # must be requested explicitly by its fused owner rather than silently
+    # changing the stable resident program.
     lora_phase = (
         1
         if (
@@ -2214,9 +2346,14 @@ def build_tt_lang_attention_forward_qkv_resident(
     attention_scale_bits = struct.unpack(
         "<I", struct.pack("<f", float(attention_scale))
     )[0]
+    debug_publish_fused_fp32_head = (
+        os.environ.get(
+            "TT_FINETUNE_DEBUG_PUBLISH_FUSED_FP32_HEAD", "0"
+        ) == "1"
+    )
     variant = hashlib.sha256(
         (
-            f"full-resident-v54-canonical-bmm-fifo:{sequence_length}:{hidden_features}:{kv_features}:"
+            f"full-resident-v61-exact-attention-cb-formats:{sequence_length}:{hidden_features}:{kv_features}:"
             f"{query_heads}:{kv_heads}:{head_dim}:{physical_rank}:"
             f"{lora_scale_bf16:.17g}:{attention_scale:.17g}:"
             f"{base_k_tiles_per_phase}:{lora_phase}:{o_lora_phase}:"
@@ -2232,6 +2369,7 @@ def build_tt_lang_attention_forward_qkv_resident(
             f"gate_up={resident_gate_up_intermediate_features!r}:"
             f"gate_up_phase={resident_gate_up_base_k_tiles_per_phase}:"
             f"full_mlp={int(full_mlp_forward)}:"
+            f"decomposed_mlp={int(full_mlp_decomposed)}:"
             f"down_phase={resident_down_base_k_tiles_per_phase}:"
             f"hidden_page_base={hidden_page_base}:"
             f"publish_page0={int(publish_layer_output_at_page_zero)}:"
@@ -2240,6 +2378,9 @@ def build_tt_lang_attention_forward_qkv_resident(
             f":dedicated_o_rank={int(dedicated_o_rank_producer)}"
             f":raw_score_checkpoint={int(publish_raw_score_checkpoint)}"
             f":rope_prefix_only={int(projection_rope_prefix_only)}"
+            f":moreh_softmax={int(canonical_moreh_softmax)}"
+            f":fp32_attention={int(fp32_canonical_attention)}"
+            f":debug_fp32_head={int(debug_publish_fused_fp32_head)}"
         ).encode()
     ).hexdigest()[:16]
 
@@ -2285,9 +2426,36 @@ def build_tt_lang_attention_forward_qkv_resident(
                     "@QUERY_HEADS@": str(query_heads),
                     "@KV_HEADS@": str(kv_heads),
                     "@SCALE_BITS@": str(attention_scale_bits),
-                    "@FP32_CANONICAL_ATTENTION@": "1",
+                    # The captured TTNN model graph packs QK, scale and mask
+                    # to BF16 before its explicit FP32 softmax promotion.  The
+                    # resident prefix now reproduces both BMM FP32-partial
+                    # schedules exactly, so retain that real graph boundary
+                    # instead of the former all-FP32 approximation.
+                    "@FP32_CANONICAL_ATTENTION@": (
+                        "1" if fp32_canonical_attention else "0"
+                    ),
+                    "@GROUPED_PV_OWNER@": (
+                        "1"
+                        if fp32_canonical_attention
+                        and not publish_raw_score_checkpoint
+                        else "0"
+                    ),
+                    "@CANONICAL_MOREH_SOFTMAX@": (
+                        "1" if canonical_moreh_softmax else "0"
+                    ),
+                    "@CANONICAL_POW2_SCALE@": (
+                        "1"
+                        if fp32_canonical_attention
+                        and attention_scale == 0.125
+                        else "0"
+                    ),
+                    "@SCALE_SHIFT@": "3",
+                    "@COMPOSED_INVOCATION_BARRIER@": "1",
                     "@PUBLISH_RAW_SCORE_CHECKPOINT@": (
                         "1" if publish_raw_score_checkpoint else "0"
+                    ),
+                    "@PUBLISH_FP32_HEAD_CHECKPOINT@": (
+                        "1" if debug_publish_fused_fp32_head else "0"
                     ),
                     "@PROJECTION_ROPE_PREFIX_ONLY@": (
                         "1" if projection_rope_prefix_only else "0"
@@ -2295,6 +2463,8 @@ def build_tt_lang_attention_forward_qkv_resident(
                     "@ATTENTION_CHECKPOINT_CB@": (
                         "23" if publish_raw_score_checkpoint else "27"
                     ),
+                    "@SOFTMAX_TAIL_MASK_CB@": "28",
+                    "@PROBABILITY_BF16_CB@": "28",
                     "@PV_PHASE_TILES@": "1",
                     "@TOTAL_CBS@": str(artifact_total_cbs),
                     "@PROJECTION_WORKERS@": str(projection_workers),
@@ -2332,7 +2502,11 @@ def build_tt_lang_attention_forward_qkv_resident(
                     ),
                     "@LORA_SCALE_BITS@": str(lora_scale_bits),
                     "@FULL_MLP_FORWARD@": "1" if full_mlp_forward else "0",
-                    "@PAIRED_SWIGLU@": "1" if full_mlp_forward else "0",
+                    "@PAIRED_SWIGLU@": (
+                        "1"
+                        if full_mlp_forward and not full_mlp_decomposed
+                        else "0"
+                    ),
                     "@LAYER_OUTPUT_BASE@": str(
                         layer_output_base if full_mlp_forward else 0
                     ),
@@ -2431,6 +2605,9 @@ def build_tt_lang_attention_forward_qkv_resident(
                     "@O_LORA_PHASE@": str(o_lora_phase),
                     "@Q_BASE@": str(plan.arena.slice("query").page_offset),
                     "@K_BASE@": str(plan.arena.slice("key").page_offset),
+                    "@VALUE_BASE@": str(
+                        plan.arena.slice("value").page_offset
+                    ),
                     "@V_BASE@": str(plan.arena.slice("value").page_offset),
                     "@HEAD_BASE@": str(plan.arena.slice("head_output").page_offset),
                     "@PROBABILITY_BASE@": str(
@@ -2581,6 +2758,75 @@ def build_tt_lang_attention_forward_qkv_resident(
                         "    }\n"
                         "    noc_async_atomic_barrier();"
                     )
+                if fp32_canonical_attention and not publish_raw_score_checkpoint:
+                    if dedicated_o_rank_producer:
+                        raise ValueError(
+                            "grouped canonical P@V is not yet compatible "
+                            "with the dedicated O-rank producer"
+                        )
+                    replacements["@HEAD_TO_O_HANDOFF@"] = (
+                        "volatile tt_l1_ptr uint32_t* o_go =\n"
+                        "        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+                        "            get_semaphore(10));\n"
+                        "    noc_semaphore_wait(o_go, 1);\n"
+                        "    noc_semaphore_set(o_go, 0);\n"
+                        "    if (row == 0) {\n"
+                        "        constexpr uint32_t grouped_row_base = 0;\n"
+                        f"        constexpr uint32_t hidden_tiles = {hidden_tiles};\n"
+                        "        constexpr uint32_t o_jobs = seq_tiles * hidden_tiles;\n"
+                        f"        constexpr uint32_t o_per_node = {o_jobs_per_worker};\n"
+                        "        const uint32_t o_hx_base =\n"
+                        "            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+                        "                get_semaphore(8));\n"
+                        "        const uint32_t o_bx_base =\n"
+                        "            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(\n"
+                        "                get_semaphore(9));\n"
+                        "        for (uint32_t owned_row = 0; owned_row < 4;\n"
+                        "             ++owned_row) {\n"
+                        "            const uint32_t output_row = grouped_row_base + owned_row;\n"
+                        "            for (uint32_t dim = 0; dim < dim_tiles; ++dim) {\n"
+                        "                const uint32_t k_tile =\n"
+                        "                    head_index * dim_tiles + dim;\n"
+                        "                const uint32_t source = head.get_read_ptr() +\n"
+                        "                    (owned_row * dim_tiles + dim) * tile_bytes;\n"
+                        "                for (uint32_t output_tile = 0;\n"
+                        "                     output_tile < hidden_tiles; ++output_tile) {\n"
+                        "                    const uint32_t job =\n"
+                        "                        output_row * hidden_tiles + output_tile;\n"
+                        "                    const uint32_t target = job / o_per_node;\n"
+                        "                    const uint32_t slot =\n"
+                        "                        job - target * o_per_node;\n"
+                        "                    const uint32_t offset =\n"
+                        "                        (slot * hidden_tiles + k_tile) * tile_bytes;\n"
+                        "                    noc_async_write(\n"
+                        "                        source, projection_l1(target, o_hx_base + offset),\n"
+                        "                        tile_bytes);\n"
+                        "                    noc_async_write(\n"
+                        "                        source, projection_l1(target, o_bx_base + offset),\n"
+                        "                        tile_bytes);\n"
+                        "                }\n"
+                        "            }\n"
+                        "        }\n"
+                        "        noc_async_write_barrier();\n"
+                        "        for (uint32_t owned_row = 0; owned_row < 4;\n"
+                        "             ++owned_row) {\n"
+                        "            const uint32_t output_row = grouped_row_base + owned_row;\n"
+                        "            for (uint32_t output_tile = 0;\n"
+                        "                 output_tile < hidden_tiles; ++output_tile) {\n"
+                        "                const uint32_t job =\n"
+                        "                    output_row * hidden_tiles + output_tile;\n"
+                        "                const uint32_t target = job / o_per_node;\n"
+                        "                for (uint32_t dim = 0; dim < dim_tiles; ++dim) {\n"
+                        "                    noc_semaphore_inc(\n"
+                        "                        projection_l1(target, get_semaphore(11)), 1);\n"
+                        "                    noc_semaphore_inc(\n"
+                        "                        projection_l1(target, get_semaphore(12)), 1);\n"
+                        "                }\n"
+                        "            }\n"
+                        "        }\n"
+                        "        noc_async_atomic_barrier();\n"
+                        "    }"
+                    )
                 cpp = Path(__file__).with_name("cpp")
                 projection_compute = _projection_compute_source(
                             sequence_tiles=seq_tiles,
@@ -2666,7 +2912,10 @@ def build_tt_lang_attention_forward_qkv_resident(
                         attention_compute_body
                     )
                     attention_compute_body = (
-                        _append_full_mlp_compute_helpers(attention_compute_body)
+                        _append_full_mlp_compute_helpers(
+                            attention_compute_body,
+                            decomposed_activation=full_mlp_decomposed,
+                        )
                         if full_mlp_forward else
                         _append_gate_up_compute_helpers(attention_compute_body)
                     )
@@ -2679,8 +2928,12 @@ def build_tt_lang_attention_forward_qkv_resident(
                     ),
                     resident_continuation=(
                         (
-                            "    run_resident_layer_paired_gate_up_swiglu();\n"
-                            "    resident_layer_swiglu_down_compute::run();\n"
+                            (
+                                "    run_resident_layer_gate_up_compute();\n"
+                                if full_mlp_decomposed else
+                                "    run_resident_layer_paired_gate_up_swiglu();\n"
+                            )
+                            + "    resident_layer_swiglu_down_compute::run();\n"
                             if full_mlp_forward else
                             "    run_resident_layer_gate_up_compute();\n"
                         )
@@ -2890,14 +3143,61 @@ def build_tt_lang_attention_forward_qkv_resident(
                     )
                     projection_fp32 = {2, 7, 17, 22}
                 attention_capacities = list(attention_capacities)
-                # The canonical model path promotes RoPE Q/K and V to FP32,
-                # keeps QK/mask/softmax/P@V in FP32, and packs only the final
-                # head. CB19/20/23/30 are deliberately reused between phases;
-                # retain a spare tile so a full-ring generation is never
-                # mistaken for an empty producer view.
+                # Match the captured TTNN attention boundaries exactly:
+                # QK/scale/mask and the P@V input are BF16, while CB19 and
+                # CB30 carry FP32 matmul partials and CB20-CB27 carry the
+                # explicit FP32 softmax.  CB19/20/23/30 are deliberately
+                # reused between phases; retain a spare tile so a full-ring
+                # generation is never mistaken for an empty producer view.
                 attention_capacities[18] = max(
                     attention_capacities[18], seq_tiles + 1
                 )
+                if fp32_canonical_attention and not publish_raw_score_checkpoint:
+                    # The accepted public Smol contract keeps raw QK, scale,
+                    # mask and the softmax input in FP32.  These two aliases
+                    # are BF16 in the alternate captured-attention contract.
+                    attention_fp32.update({18, 28})
+                    # CB16 holds the K-major 4x4 probability block on each
+                    # head leader.  CB30 holds two 2x2 FP32 partial
+                    # subblocks, and CB31 owns the final 4x2 BF16 head block.
+                    attention_capacities[16] = max(
+                        # Canonical scaling has already used one CB16 credit.
+                        # Keep the complete K-major block contiguous after
+                        # that advanced write pointer instead of wrapping a
+                        # full-ring reservation through adjacent L1 storage.
+                        attention_capacities[16], seq_tiles * seq_tiles + 1
+                    )
+                    attention_fp32.add(16)
+                    attention_capacities[30] = max(
+                        # QK has advanced CB30 by one partial per output
+                        # column.  Keep all three 4x2 P@V partial generations
+                        # physically contiguous after that point; a wrapped
+                        # 2x2 pack corrupts the second output-row subblock.
+                        attention_capacities[30],
+                        seq_tiles * (dim_tiles - 1)
+                        + (seq_tiles - 1) * seq_tiles * dim_tiles
+                        + 1,
+                    )
+                    attention_capacities[27] = max(
+                        attention_capacities[27], seq_tiles * seq_tiles
+                    )
+                    attention_capacities[31] = max(
+                        attention_capacities[31], seq_tiles * dim_tiles
+                    )
+                    attention_capacities[28] = max(
+                        attention_capacities[28], seq_tiles * dim_tiles
+                    )
+                    attention_capacities[19] = max(
+                        attention_capacities[19],
+                        # Q promotion, the streamed QK reader copies and mask
+                        # promotion advance CB19 by D + S*D + S tiles before
+                        # P@V publishes its complete 4xD FP32 head.  Keep the
+                        # final generation physically contiguous; a circular
+                        # wrap here leaves the second 2xD subblock reading the
+                        # adjacent CB allocation rather than its own result.
+                        dim_tiles + seq_tiles * dim_tiles + seq_tiles
+                        + seq_tiles * dim_tiles + 1,
+                    )
                 if publish_raw_score_checkpoint:
                     # CB16 is unused by the canonical FP32 path.  Preserve an
                     # exact copy of raw QK there until the writer publishes it
@@ -2912,24 +3212,46 @@ def build_tt_lang_attention_forward_qkv_resident(
                 )
                 attention_capacities[20] = max(
                     attention_capacities[20],
-                    2 * seq_tiles * dim_tiles + seq_tiles + 1,
+                    # K promotion and the streamed QK reader copies advance
+                    # CB20 by two complete SxD generations.  P@V then appends
+                    # one complete FP32 V generation.  Keep all three
+                    # physically contiguous: wrapping the fourth causal K
+                    # block changes/corrupts only the last query row, which is
+                    # the sole row with a non-zero contribution from that
+                    # block.
+                    3 * seq_tiles * dim_tiles + 1,
                 )
                 attention_capacities[23] = max(
                     attention_capacities[23], 2 * seq_tiles + 1
                 )
                 attention_capacities[30] = max(
-                    attention_capacities[30], dim_tiles + 1
+                    attention_capacities[30],
+                    (
+                        seq_tiles + dim_tiles + 1
+                        if canonical_moreh_softmax else dim_tiles + 1
+                    ),
                 )
-                attention_fp32.add(18)
-                attention_fp32.add(28)
                 projection_physical_capacities = list(
                     projection_physical_capacities
                 )
                 if resident_gate_up:
-                    gate_jobs = seq_tiles * (
-                        intermediate_tiles if full_mlp_forward
-                        else 2 * intermediate_tiles
+                    # The historical full-MLP owner computes gate+up as one
+                    # paired job.  The exact decomposed owner deliberately
+                    # restores two independent BF16 jobs so its rounding
+                    # schedule matches TTNN.  Size every reused CB from the
+                    # physical job geometry, not merely from the fact that a
+                    # full MLP follows.  Treating the decomposed schedule as
+                    # paired under-allocated CB0 for the three workers whose
+                    # job ranges straddle token rows; their 36-tile X cache
+                    # could never reserve inside the former 19-page ring.
+                    paired_swiglu = bool(
+                        full_mlp_forward and not full_mlp_decomposed
                     )
+                    gate_n_tiles = (
+                        intermediate_tiles
+                        if paired_swiglu else 2 * intermediate_tiles
+                    )
+                    gate_jobs = seq_tiles * gate_n_tiles
                     gate_jobs_per_core = -(-gate_jobs // 60)
                     maximum_cached_rows = 0
                     maximum_local_groups = 0
@@ -2940,14 +3262,8 @@ def build_tt_lang_attention_forward_qkv_resident(
                             continue
                         maximum_cached_rows = max(
                             maximum_cached_rows,
-                            (stop - 1) // (
-                                intermediate_tiles if full_mlp_forward
-                                else 2 * intermediate_tiles
-                            )
-                            - first // (
-                                intermediate_tiles if full_mlp_forward
-                                else 2 * intermediate_tiles
-                            ) + 1,
+                            (stop - 1) // gate_n_tiles
+                            - first // gate_n_tiles + 1,
                         )
                         maximum_local_groups = max(
                             maximum_local_groups,
@@ -2956,7 +3272,7 @@ def build_tt_lang_attention_forward_qkv_resident(
                                     (stop - 1) // intermediate_tiles
                                     - first // intermediate_tiles + 1
                                 )
-                                if full_mlp_forward else
+                                if paired_swiglu else
                                 (stop - 1) // intermediate_tiles
                                 - first // intermediate_tiles + 1
                             ),
@@ -3283,6 +3599,7 @@ def build_tt_lang_attention_forward_qkv_resident(
     operation.post_attention_rmsnorm_epsilon = post_attention_rmsnorm_epsilon
     operation.resident_gate_up = resident_gate_up
     operation.resident_full_mlp_forward = full_mlp_forward
+    operation.resident_full_mlp_decomposed = full_mlp_decomposed
     operation.input_rmsnorm_debug_page_offset = (
         input_rmsnorm_debug_base if debug_input_rmsnorm_checkpoint else None
     )

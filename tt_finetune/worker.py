@@ -2268,7 +2268,9 @@ def run(
                     ),
                 })
         moe_numerical_contract = (
-            "deterministic_no_drop_selected_block_bf16_hifi4_fp32_v1"
+            "deterministic_no_drop_selected_block_bf16_fp32_validated_v2"
+            if moe_execution_paths.get("dynamic_selected_block_batched", 0) > 0
+            else "deterministic_no_drop_sparse_matmul_installed_default_v1"
             if moe_execution_paths.get("dynamic_native_expert_bucketed", 0) > 0
             else "safe_bf16_reference"
         )
@@ -2334,15 +2336,23 @@ def run(
                     ),
                     "capacity_semantics": (
                         "exact_no_drop_per_expert_token_bound"
-                        if moe_execution_paths.get(
-                            "dynamic_native_expert_bucketed", 0
+                        if sum(
+                            moe_execution_paths.get(name, 0)
+                            for name in (
+                                "dynamic_selected_block_batched",
+                                "dynamic_native_expert_bucketed",
+                            )
                         ) > 0 else None
                     ),
                     "routing_location": "device",
                     "expert_block_rows": (
                         32
-                        if moe_execution_paths.get(
-                            "dynamic_native_expert_bucketed", 0
+                        if sum(
+                            moe_execution_paths.get(name, 0)
+                            for name in (
+                                "dynamic_selected_block_batched",
+                                "dynamic_native_expert_bucketed",
+                            )
                         ) > 0 else None
                     ),
                 },

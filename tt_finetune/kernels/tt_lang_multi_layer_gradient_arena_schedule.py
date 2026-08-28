@@ -405,6 +405,18 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
         if compact_forward
         else build_tt_lang_resident_layer_forward_trainable_owner
     )
+    fused_exact_attention_owner = bool(
+        canonical_exact_attention
+        and os.environ.get(
+            "TT_FINETUNE_FUSED_EXACT_ATTENTION_OWNER", "0"
+        ) == "1"
+    )
+    fused_exact_mlp_owner = bool(
+        canonical_exact_attention
+        and os.environ.get(
+            "TT_FINETUNE_FUSED_EXACT_MLP_OWNER", "0"
+        ) == "1"
+    )
     exact_forward_kwargs = (
         {
             "canonical_native_o_path": True,
@@ -414,6 +426,8 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
             # head output to BF16 only after P@V.  Keep that observed graph
             # contract; selecting the BF16 core changes the reduction tree.
             "canonical_bf16_attention": False,
+            "fused_exact_attention_owner": fused_exact_attention_owner,
+            "fused_exact_mlp_owner": fused_exact_mlp_owner,
             "canonical_grouped_qkv_rank": bool(
                 not has_bias and logical_rank == 8
             ),
@@ -1160,6 +1174,11 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
                 compact_forward and execution_phase == "forward"
             ):
                 children.append(scrub)
+            if (
+                debug_forward_checkpoint_only
+                and layer == checkpoint_diagnostic_layer
+            ):
+                break
         # Combined execution reaches reverse immediately after the final
         # forward epoch's explicit semaphore scrub.  Split backward used to
         # skip that lifecycle boundary, exposing attention kernels to stale

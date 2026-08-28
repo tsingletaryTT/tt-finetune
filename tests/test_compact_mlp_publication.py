@@ -5,6 +5,9 @@ import pytest
 from tt_finetune.kernels.tt_lang_program_composition import (
     serialized_child_tensor_ids,
 )
+from tt_finetune.kernels.tt_lang_attention_forward_qkv_resident import (
+    _layer_swiglu_down_compute_source,
+)
 from tt_finetune.kernels.tt_lang_resident_layer_forward_compact_owner import (
     _fuse_grouped2_checkpoint_publication,
     _fuse_residual_add_publication,
@@ -207,3 +210,20 @@ def test_rmsnorm_writer_rewrite_fails_closed_for_scalar_schedule() -> None:
             output_tensor_index=31,
             checkpoint_tensor_index=30,
         )
+
+
+def test_experimental_decomposed_mlp_uses_a_valid_60_core_schedule() -> None:
+    source = _layer_swiglu_down_compute_source()
+
+    assert "constexpr uint32_t kOutputCoreCount = kCoreCount;" in source
+    assert "constexpr uint32_t kProductCoreStart = 0;" in source
+    assert "constexpr uint32_t kProductCoreCount = kCoreCount;" in source
+    assert "kCoreCount - kOutputCoreCount" not in source
+
+
+def test_experimental_decomposed_mlp_reads_the_distributed_product_window() -> None:
+    source = _layer_swiglu_down_compute_source()
+
+    assert "? cb_gate : cb_product_resident" in source
+    assert "? cb_up : cb_product_resident" in source
+    assert source.count("local * i_tiles") >= 2

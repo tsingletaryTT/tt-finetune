@@ -6,11 +6,11 @@ Install the current platform wheel into a clean CPython 3.12 virtual environment
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.0/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
+python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.1/tt_finetune-0.2.1-cp312-cp312-linux_x86_64.whl
 tt-finetune doctor --smoke
 ```
 
-Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/tag/v0.2.0>
+Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/latest>
 
 The host must provide the Tenstorrent kernel driver, access to
 `/dev/tenstorrent`, compatible firmware, and the configured hugepage mount.

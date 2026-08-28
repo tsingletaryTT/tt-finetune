@@ -330,12 +330,27 @@ def main():
         # Historical public exports recorded the latter; current exports use
         # the former.  Both point to the same mounted checkpoint and neither
         # is a model-family/backend routing signal.
-        accepted_base_identities = {
-            str(value)
+        def base_identities(value):
+            if not value:
+                return set()
+            raw = str(value)
+            identities = {raw}
+            path = Path(raw).expanduser()
+            if path.exists():
+                identities.add(str(path.resolve()))
+            return identities
+
+        accepted_base_identities = set().union(*(
+            base_identities(value)
             for value in (config.model_metadata_name, config.model_name)
-            if value
-        }
-        if adapter_base and str(adapter_base) not in accepted_base_identities:
+        ))
+        adapter_base_identities = base_identities(adapter_base)
+        if (
+            adapter_base
+            and not adapter_base_identities.intersection(
+                accepted_base_identities
+            )
+        ):
             mismatches["base_model_name_or_path"] = {
                 "adapter": str(adapter_base),
                 "requested": str(expected_base),

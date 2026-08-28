@@ -133,9 +133,11 @@ def main():
             init_lora_weights=init_weights,
         )
     model = get_peft_model(model, peft_config)
-    model.peft_config["default"].base_model_name_or_path = (
-        args.metadata_base_model or args.base_model
-    )
+    exported_base_model = args.metadata_base_model or args.base_model
+    exported_base_path = Path(exported_base_model).expanduser()
+    if exported_base_path.exists():
+        exported_base_model = str(exported_base_path.resolve())
+    model.peft_config["default"].base_model_name_or_path = exported_base_model
 
     model_keys = set(model.state_dict())
     unexpected = sorted(set(adapter_state) - model_keys)
@@ -193,9 +195,7 @@ def main():
         json.dumps(
             {
                 "format": "tt-finetune-training-metadata-v1",
-                "base_model_name_or_path": (
-                    args.metadata_base_model or args.base_model
-                ),
+                "base_model_name_or_path": exported_base_model,
                 "base_model_revision": args.model_revision,
                 "adapter_method": "+".join(adapter_features) or "lora",
                 "adapter_features": adapter_features,
@@ -220,7 +220,7 @@ def main():
         )
         extension = {
             "format": "tt-finetune-sparse-moe-v1",
-            "base_model_name_or_path": args.base_model,
+            "base_model_name_or_path": exported_base_model,
             "rank": args.rank,
             "alpha": args.alpha,
             "tensor_count": len(tt_sparse_moe_state),

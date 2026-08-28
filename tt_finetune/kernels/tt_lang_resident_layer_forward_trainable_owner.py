@@ -46,6 +46,7 @@ def build_tt_lang_resident_layer_forward_trainable_owner(
     hidden_page_base: int = 0,
     publish_layer_output_at_page_zero: bool = True,
     o_lora_k_tiles_per_phase: int | None = None,
+    decomposed_full_mlp: bool = False,
 ) -> Callable:
     """Build the exact trainable-state forward owner for one full layer."""
     base = build_tt_lang_attention_forward_qkv_resident(
@@ -64,6 +65,7 @@ def build_tt_lang_resident_layer_forward_trainable_owner(
         post_attention_rmsnorm_epsilon=post_attention_rmsnorm_epsilon,
         resident_gate_up_intermediate_features=intermediate_features,
         resident_full_mlp_forward=True,
+        resident_full_mlp_decomposed=decomposed_full_mlp,
         hidden_page_base=hidden_page_base,
         publish_layer_output_at_page_zero=publish_layer_output_at_page_zero,
     )
@@ -111,7 +113,8 @@ def build_tt_lang_resident_layer_forward_trainable_owner(
         f"{sequence_length}x{hidden_features}.i{intermediate_features}."
         f"q{query_heads}.k{kv_heads}.d{head_dim}.r{physical_rank}."
         f"bias{int(has_bias)}.hidden{hidden_page_base}."
-        f"page0{int(publish_layer_output_at_page_zero)}.v3"
+        f"page0{int(publish_layer_output_at_page_zero)}."
+        f"decomposedmlp{int(decomposed_full_mlp)}.v4"
     )
 
     @tt_lang_operation(
@@ -194,6 +197,7 @@ def build_tt_lang_resident_layer_forward_trainable_owner(
     operation.projection_cb_bytes = base.projection_cb_bytes
     operation.reverse_handoff_noc_bytes = base.reverse_handoff_noc_bytes
     operation.trainable_mlp_parameters = True
+    operation.decomposed_full_mlp = bool(decomposed_full_mlp)
     operation.safe_default = False
     operation.experimental_backend = "full_layer_forward_trainable_v1"
     operation._ttl_program = _probe

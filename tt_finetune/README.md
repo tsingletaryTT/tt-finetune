@@ -63,13 +63,15 @@ trainer.train()
 
 ## Install
 
-Install the supplied platform wheel. Its dependency metadata installs the
+Install the v0.2.1 platform wheel. Its dependency metadata installs the
 compatible host-side data tools:
 
 ```bash
-python -m pip install ./dist/tt_finetune-0.2.1rc1-cp312-cp312-linux_x86_64.whl
-tt-finetune doctor
+python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.1/tt_finetune-0.2.1-cp312-cp312-linux_x86_64.whl
+tt-finetune doctor --smoke
 ```
+
+Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/latest>
 
 The platform wheel bundles the compatible TT-XLA/PJRT plugin, TTNN, TT-Metal
 user-space libraries, compiler/runtime libraries, Python bindings, custom ops,

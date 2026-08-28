@@ -100,6 +100,7 @@ def build_tt_lang_resident_attention_block_forward_owner(
     canonical_native_o_path: bool = False,
     logical_rank: int | None = None,
     exact_attention_tail: bool = False,
+    fused_exact_attention_owner: bool = False,
     canonical_bf16_attention: bool = False,
     canonical_grouped_qkv_rank: bool = False,
     canonical_separate_qkv_rank: bool = False,
@@ -191,6 +192,7 @@ def build_tt_lang_resident_attention_block_forward_owner(
             canonical_grouped_qkv_rank=canonical_grouped_qkv_rank,
             canonical_separate_qkv_rank=canonical_separate_qkv_rank,
             exact_attention_tail=True,
+            fused_exact_attention_owner=fused_exact_attention_owner,
             canonical_bf16_attention=canonical_bf16_attention,
         )
     else:
@@ -277,6 +279,7 @@ def build_tt_lang_resident_attention_block_forward_owner(
         f"oloraphase{o_lora_k_tiles_per_phase}."
         f"nativeo{int(canonical_native_o_path)}."
         f"rank{logical_rank}.exact{int(exact_attention_tail)}."
+        f"fusedexact{int(fused_exact_attention_owner)}."
         f"bf16{int(canonical_bf16_attention)}."
         f"groupedrank{int(canonical_grouped_qkv_rank)}."
         f"separaterank{int(canonical_separate_qkv_rank)}."

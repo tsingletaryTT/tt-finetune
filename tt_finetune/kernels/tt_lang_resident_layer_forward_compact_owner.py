@@ -755,6 +755,8 @@ def build_tt_lang_resident_layer_forward_compact_owner(
     gate_up_base_k_tiles_per_phase: int | None = None,
     canonical_native_o_path: bool = False,
     exact_attention_tail: bool = False,
+    fused_exact_attention_owner: bool = False,
+    fused_exact_mlp_owner: bool = False,
     canonical_bf16_attention: bool = False,
     canonical_grouped_qkv_rank: bool = False,
     canonical_separate_qkv_rank: bool = False,
@@ -792,6 +794,7 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         canonical_native_o_path=canonical_native_o_path,
         logical_rank=logical_rank,
         exact_attention_tail=exact_attention_tail,
+        fused_exact_attention_owner=fused_exact_attention_owner,
         canonical_bf16_attention=canonical_bf16_attention,
         canonical_grouped_qkv_rank=canonical_grouped_qkv_rank,
         canonical_separate_qkv_rank=canonical_separate_qkv_rank,
@@ -813,6 +816,7 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         hidden_page_base=hidden_page_base,
         publish_layer_output_at_page_zero=publish_layer_output_at_page_zero,
         o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
+        decomposed_full_mlp=fused_exact_mlp_owner,
     )
     checkpoint_copy = build_tt_lang_owner_aligned_copy(
         rows=sequence_length, columns=hidden_features
@@ -841,7 +845,9 @@ def build_tt_lang_resident_layer_forward_compact_owner(
     # Attention arithmetic fidelity and the MLP schedule are independent.
     # Rank-scaled owners use the canonical BF16 attention core, but must keep
     # the already-qualified grouped2 + decomposed-SwiGLU MLP path as well.
-    production_exact_mlp = bool(canonical_mlp)
+    if fused_exact_mlp_owner and not canonical_mlp:
+        raise ValueError("fused exact MLP requires the canonical exact layer")
+    production_exact_mlp = bool(canonical_mlp and not fused_exact_mlp_owner)
     precomputed_mlp_rank_delta = bool(
         production_exact_mlp and physical_rank > 32
     )
@@ -1333,6 +1339,10 @@ def build_tt_lang_resident_layer_forward_compact_owner(
                 ),
                 mlp_spec([sequence_length, hidden_features]),
             )
+        if fused_exact_mlp_owner:
+            # The decomposed one-program MLP tail owns all of its CB/L1 state
+            # internally and publishes only the accepted checkpoint arena.
+            canonical_mlp_internal_specs = ()
 
     global ttl, tt_lang_operation
     if ttl is None or tt_lang_operation is None:
@@ -1379,6 +1389,8 @@ def build_tt_lang_resident_layer_forward_compact_owner(
         f"page0{int(publish_layer_output_at_page_zero)}."
         f"extres{int(debug_external_mlp_residual)}."
         f"exactattn{int(exact_attention_tail)}."
+        f"fusedexact{int(fused_exact_attention_owner)}."
+        f"fusedexactmlp{int(fused_exact_mlp_owner)}."
         f"bf16{int(canonical_bf16_attention)}."
         f"groupedrank{int(canonical_grouped_qkv_rank)}."
         f"separaterank{int(canonical_separate_qkv_rank)}."
@@ -1501,7 +1513,25 @@ def build_tt_lang_resident_layer_forward_compact_owner(
             compile_serialized_child(semaphore_scrub, (t00, t29))
         ))
 
-        if production_native_gate_up:
+        if fused_exact_mlp_owner:
+            from .tt_lang_program_composition import (
+                extract_resident_full_mlp_forward_child,
+            )
+
+            mlp_child = compile_serialized_child(
+                monolithic, (*tensors[:27], t30)
+            )
+            mlp_child = extract_resident_full_mlp_forward_child(
+                mlp_child, normalized_tensor=0, residual_tensor=28
+            )
+            mlp_map = {
+                0: 31,
+                **{index: index for index in range(1, 27)},
+                27: 30,
+                28: 29 if debug_external_mlp_residual else 32,
+            }
+            children.append(_remap_used(mlp_child, mlp_map))
+        elif production_native_gate_up:
             hidden_tiles = hidden_features // 32
             intermediate_tiles = intermediate_features // 32
             sequence_tiles = sequence_length // 32
@@ -2431,6 +2461,14 @@ def build_tt_lang_resident_layer_forward_compact_owner(
 
     operation.artifact_format = 4
     operation.physical_programs = (
+        (
+            attention.physical_programs
+            + (0 if fused_attention_checkpoint_publication else 2)
+            # One pure semaphore/CB epoch scrub and one extracted exact MLP
+            # program follow the attention sequence.
+            + 2
+        )
+        if fused_exact_mlp_owner else
         attention.physical_programs
         - (2 if fused_attention_checkpoint_publication else 0)
         + (

@@ -214,7 +214,7 @@ def main() -> int:
         rank=spec["rank"],
         target_modules="auto",
         data_config=DataConfig(
-            format="prompt_response",
+            format="auto",
             assistant_only_loss=True,
             packing="auto",
             sequence_bucketing="auto",

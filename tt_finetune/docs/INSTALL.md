@@ -1,17 +1,16 @@
 # Installation
 
 `tt-finetune` targets a single Tenstorrent Blackhole P150a on 64-bit Linux.
-Install the supplied wheel into a clean Python virtual environment:
+Install the v0.2.1 platform wheel into a clean CPython 3.12 virtual environment:
 
 ```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install ./tt_finetune-0.2.1rc1-cp312-cp312-linux_x86_64.whl
-tt-finetune doctor
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install https://github.com/danielisraeli2409-jpg/tt-finetune/releases/download/v0.2.1/tt_finetune-0.2.1-cp312-cp312-linux_x86_64.whl
+tt-finetune doctor --smoke
 ```
 
-The final wheel filename may include a more specific platform tag. Use the
-filename present in the release `dist/` directory.
+Release page: <https://github.com/danielisraeli2409-jpg/tt-finetune/releases/latest>
 
 The host must provide the Tenstorrent kernel driver, access to
 `/dev/tenstorrent`, compatible firmware, and the configured hugepage mount.

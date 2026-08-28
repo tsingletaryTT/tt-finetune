@@ -153,14 +153,6 @@ __attribute__((optimize("Os"))) void kernel_main() {
         tensor_accessor::detail::get_tensor_accessor_args_cta_offset<@ARENA_TENSOR_INDEX@, @TOTAL_CBS@>(), 0>(),
         get_common_arg_val<uint32_t>(0), kTileBytes);
     Noc noc1(1);
-    if (node == 0) {
-        // Reader cores increment this only after both O input windows are
-        // reserved.  Reset here, before the much longer Q/K/V epochs, so a
-        // previous program invocation cannot satisfy the next readiness wait.
-        volatile tt_l1_ptr uint32_t* o_ready =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(13));
-        noc_semaphore_set(o_ready, 0);
-    }
     if constexpr (kInputRMSNorm) {
         // RMSNorm compute publishes CB22 only on the sequence row owners.
         // Consume that CB through the supported compute -> writer edge, then

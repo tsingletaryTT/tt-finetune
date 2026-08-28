@@ -151,7 +151,10 @@ def _arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wheel", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
+    parser.add_argument("--moe-model", type=Path)
     parser.add_argument("--dataset", type=Path, required=True)
+    parser.add_argument("--moe-dataset", type=Path)
+    parser.add_argument("--moe-steps", type=int, default=4)
     parser.add_argument("--environment-root", type=Path, required=True)
     parser.add_argument("--work-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -162,7 +165,17 @@ def main() -> int:
     arguments = _arguments()
     wheel = arguments.wheel.expanduser().resolve()
     model = arguments.model.expanduser().resolve()
+    moe_model = (
+        arguments.moe_model.expanduser().resolve()
+        if arguments.moe_model is not None
+        else None
+    )
     dataset = arguments.dataset.expanduser().resolve()
+    moe_dataset = (
+        arguments.moe_dataset.expanduser().resolve()
+        if arguments.moe_dataset is not None
+        else dataset
+    )
     environment_root = arguments.environment_root.expanduser().resolve()
     work_root = arguments.work_root.expanduser().resolve()
     output = arguments.output.expanduser().resolve()
@@ -174,6 +187,12 @@ def main() -> int:
         raise FileNotFoundError(model / "config.json")
     if not dataset.is_file():
         raise FileNotFoundError(dataset)
+    if moe_model is not None and not (moe_model / "config.json").is_file():
+        raise FileNotFoundError(moe_model / "config.json")
+    if moe_model is not None and not moe_dataset.is_file():
+        raise FileNotFoundError(moe_dataset)
+    if arguments.moe_steps <= 0:
+        raise ValueError("--moe-steps must be positive")
     if environment_root.exists():
         raise FileExistsError(
             f"fresh environment path already exists: {environment_root}"
@@ -244,7 +263,7 @@ trainer = TTTrainer(
     dataset=dataset_path,
     rank=8,
     target_modules="auto",
-    data_config=DataConfig(format="prompt_response"),
+    data_config=DataConfig(format="auto"),
     args=TrainingArguments(
         output_dir=str(output_path.parent / "constructed-run"),
         max_steps=4,
@@ -406,6 +425,33 @@ output_path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
         environment=environment,
         log=logs / "adapter-inspect.log",
     )
+
+    moe_metrics = None
+    if moe_model is not None:
+        moe_root = work_root / "dynamic-selected-expert-moe"
+        _run(
+            [
+                str(python),
+                "-m",
+                "blackhole_training.qualify_semantic_holdout",
+                "--model",
+                str(moe_model),
+                "--dataset",
+                str(moe_dataset),
+                "--output",
+                str(moe_root),
+                "--steps",
+                str(arguments.moe_steps),
+                "--sequence-length",
+                "128",
+                "--rank",
+                "8",
+            ],
+            cwd=work_root,
+            environment=environment,
+            log=logs / "dynamic-selected-expert-moe.log",
+        )
+        moe_metrics = _load(moe_root / "run" / "training_metrics.json")
     runtime_released = _stop_idle_runtime(
         clean_home / ".cache" / "tt-finetune" / "workspace"
     )
@@ -418,6 +464,12 @@ output_path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
     comparison = _load(comparison_path)
     reload_comparison = _load(reload_comparison_path)
     inspect_payload = json.loads(adapter_inspect.stdout)
+    moe_contract = (
+        moe_metrics.get("moe_execution_contract", {})
+        if moe_metrics is not None
+        else {}
+    )
+    moe_owners = moe_contract.get("owners") or []
     package_file = Path(probe.get("package_file", "/missing"))
     runtime_paths = [
         Path(value)
@@ -488,6 +540,32 @@ output_path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
             reload_metrics.get("initial_adapter") is not None
             and reload_comparison.get("status") == "accepted"
         ),
+        "dynamic_selected_expert_moe": (
+            moe_metrics is None
+            or (
+                moe_metrics.get("status") == "completed"
+                and int(moe_metrics.get("global_steps") or 0)
+                == arguments.moe_steps
+                and moe_metrics.get("moe_execution_strategy") == "dynamic"
+                and bool(moe_owners)
+                and all(
+                    str(owner.get("schedule", "")).startswith(
+                        "dynamic_selected"
+                    )
+                    for owner in moe_owners
+                )
+                and moe_contract.get("host_token_routing_loop") is False
+                and moe_contract.get("evaluates_all_experts") is False
+                and moe_metrics.get("final_training_state", {})
+                .get("trainable_finiteness", {})
+                .get("finite")
+                is True
+                and moe_metrics.get("final_training_state", {})
+                .get("optimizer_logical_finiteness", {})
+                .get("finite")
+                is True
+            )
+        ),
         "no_development_paths_in_wheel": not forbidden_wheel_paths,
         "no_absolute_development_rpaths": not rpath_violations,
         "isolated_persistent_runtime_released": runtime_released,
@@ -524,6 +602,21 @@ output_path.write_text(json.dumps(payload, indent=2, default=str) + "\n")
             "exact_resume": comparison,
             "reload_steps": reload_metrics.get("global_steps"),
             "adapter_reload": reload_comparison,
+            "dynamic_selected_expert_moe": {
+                "requested": moe_model is not None,
+                "model": str(moe_model) if moe_model is not None else None,
+                "steps": (
+                    moe_metrics.get("global_steps")
+                    if moe_metrics is not None
+                    else None
+                ),
+                "strategy": (
+                    moe_metrics.get("moe_execution_strategy")
+                    if moe_metrics is not None
+                    else None
+                ),
+                "contract": moe_contract or None,
+            },
         },
         "path_audit": {
             "wheel_forbidden_paths": forbidden_wheel_paths,

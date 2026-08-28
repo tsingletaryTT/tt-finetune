@@ -6,8 +6,10 @@
 #include "api/dataflow/noc.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/kernel/dataflow/moreh_common.hpp"
 
 void kernel_main() {
+    WAYPOINT("AFR0");
     constexpr uint32_t cb_q = 0, cb_q_cos = 1, cb_q_sin = 2;
     constexpr uint32_t cb_k = 3, cb_k_cos = 4, cb_k_sin = 5;
     constexpr uint32_t cb_mask = 17;
@@ -88,13 +90,15 @@ void kernel_main() {
     k.push_back(vector_tiles); k_cos.push_back(vector_tiles);
     k_sin.push_back(vector_tiles); v.push_back(vector_tiles);
     mask_cb.push_back(seq_tiles);
+    WAYPOINT("AFR1");
 
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    WAYPOINT("AFR2");
 
-#if @FP32_CANONICAL_ATTENTION@
+#if @FP32_CANONICAL_ATTENTION@ && !@CANONICAL_POW2_SCALE@
     CircularBuffer score_scale(cb_score_scale_fp32);
     score_scale.reserve_back(1);
     auto* scale_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
@@ -104,10 +108,58 @@ void kernel_main() {
     score_scale.push_back(1);
 #endif
 
+#if @CANONICAL_MOREH_SOFTMAX@
+    WAYPOINT("AFR3");
+    // Mirror SoftmaxProgramFactoryGeneralWSmall's dedicated FP32 tail mask.
+    // S=128 has no partial column tile, but the materialized all-ones mask is
+    // still part of the kernel's observable initialization schedule.
+    DataflowBuffer softmax_tail_mask(@SOFTMAX_TAIL_MASK_CB@);
+    generate_mask_w<uint32_t>(softmax_tail_mask, 32);
+#endif
+
+#if @PUBLISH_RAW_SCORE_CHECKPOINT@ && !@CANONICAL_POW2_SCALE@
+    // Snapshot the post-BF16-boundary FP32 softmax input without DRAM. The
+    // compute RISC waits for the CB16 credit before consuming CB20.
+    CircularBuffer softmax_input(20), saved_softmax_input(27), checkpoint_ack(16);
+    softmax_input.wait_front(seq_tiles);
+    saved_softmax_input.reserve_back(seq_tiles);
+    for (uint32_t tile = 0; tile < seq_tiles; ++tile) {
+        auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            softmax_input.get_read_ptr() + tile * 4096);
+        auto* destination = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            saved_softmax_input.get_write_ptr() + tile * 4096);
+        for (uint32_t word = 0; word < 1024; ++word)
+            destination[word] = source[word];
+    }
+    saved_softmax_input.push_back(seq_tiles);
+    checkpoint_ack.reserve_back(1);
+    checkpoint_ack.push_back(1);
+#endif
+
+#if !@PUBLISH_RAW_SCORE_CHECKPOINT@
+    // The canonical compute kernel packs only one output FIFO. Preserve that
+    // schedule exactly, then copy the finished FP32 bytes locally for the
+    // backward checkpoint instead of issuing a second compute-side pack.
+    CircularBuffer probability(26), saved_probability(27);
+    probability.wait_front(seq_tiles);
+    WAYPOINT("AFR4");
+    saved_probability.reserve_back(seq_tiles);
+    for (uint32_t tile = 0; tile < seq_tiles; ++tile) {
+        auto* source = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            probability.get_read_ptr() + tile * 4096);
+        auto* destination = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            saved_probability.get_write_ptr() + tile * 4096);
+        for (uint32_t word = 0; word < 1024; ++word)
+            destination[word] = source[word];
+    }
+    saved_probability.push_back(seq_tiles);
+    WAYPOINT("AFR5");
+#endif
+
 #if !@FP32_CANONICAL_ATTENTION@
     // Legacy exact device-local RNE handoff from FP32 softmax to BF16 P@V.
     CircularBuffer probability_fp32(cb_probability_fp32);
-    CircularBuffer probability_bf16(28);
+    CircularBuffer probability_bf16(@PROBABILITY_BF16_CB@);
     probability_fp32.wait_front(seq_tiles);
     probability_bf16.reserve_back(seq_tiles);
     for (uint32_t tile = 0; tile < seq_tiles; ++tile) {
@@ -124,4 +176,5 @@ void kernel_main() {
     probability_bf16.push_back(seq_tiles);
     probability_fp32.pop_front(seq_tiles);
 #endif
+    WAYPOINT("AFR9");
 }

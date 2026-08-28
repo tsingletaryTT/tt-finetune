@@ -1,5 +1,6 @@
 import torch
 
+from tt_finetune.kernels import dynamic_sparse_expert
 from tt_finetune.kernels.dynamic_sparse_expert import (
     dynamic_pack_expert_assignments,
     dynamic_restore_expert_assignments,
@@ -142,6 +143,67 @@ def _dynamic_moe_projection_fixture():
     return module
 
 
+def test_shared_swiglu_lora_exposes_every_parameter_to_compiled_autograd():
+    experts, width, intermediate, rank = 4, 32, 64, 8
+    generator = torch.Generator().manual_seed(441)
+    routed = {
+        "up": torch.randn(
+            experts, width, width, generator=generator, dtype=torch.float32
+        ),
+        "down": torch.randn(
+            experts, width, width, generator=generator, dtype=torch.float32
+        ),
+    }
+    shared = {
+        "gate": torch.randn(
+            1, intermediate, width, generator=generator, dtype=torch.float32
+        ),
+        "up": torch.randn(
+            1, intermediate, width, generator=generator, dtype=torch.float32
+        ),
+        "down": torch.randn(
+            1, width, intermediate, generator=generator, dtype=torch.float32
+        ),
+    }
+    shared_gate = torch.nn.Linear(width, 1, bias=False)
+    module = GenericDeviceSparseMoELoRA(
+        torch.nn.Identity(),
+        router_layer=torch.nn.Linear(width, experts, bias=False),
+        routed_weights=routed,
+        shared_weights=shared,
+        shared_gate=shared_gate,
+        rank=rank,
+        alpha=rank,
+        top_k=2,
+        backend="dynamic",
+        router_normalization="softmax_selected",
+        output_contract="hidden",
+    )
+    with torch.no_grad():
+        for value in module.shared_lora_B.values():
+            value.normal_(generator=generator)
+
+    class Shared(torch.nn.Module):
+        def __init__(self, owner):
+            super().__init__()
+            self.owner = owner
+
+        def forward(self, values):
+            return self.owner._shared_experts(values).float().square().sum()
+
+    values = torch.randn(32, width, generator=generator, dtype=torch.float32)
+    eager = Shared(module)(values).detach()
+    compiled = torch.compile(Shared(module), backend="eager", fullgraph=True)(
+        values
+    )
+    assert torch.equal(compiled.detach(), eager)
+    compiled.backward()
+
+    for role in ("gate", "up", "down"):
+        assert module.shared_lora_A[role].grad is not None
+        assert module.shared_lora_B[role].grad is not None
+
+
 def test_dynamic_no_capacity_packing_restores_every_assignment_exactly():
     module = _dynamic_moe_projection_fixture()
     tokens, top_k, width = 64, 2, 32
@@ -185,6 +247,114 @@ def test_dynamic_pack_restore_custom_ops_survive_fullgraph_backward():
     torch.compile(RoundTrip(), backend="eager", fullgraph=True)(values).backward()
     expected_gradient = (values.detach().float() * 2).to(torch.bfloat16)
     assert torch.equal(values.grad, expected_gradient)
+
+
+def test_gather_pack_backward_matches_safe_dispatch_exactly(monkeypatch):
+    module = _dynamic_moe_projection_fixture()
+    tokens, top_k, width = 64, 2, 32
+    selected, _exact, _blocks = _routing(tokens, module.expert_count, top_k)
+    positions = module._routing_positions(selected)
+    values = torch.randn(tokens, top_k, width, dtype=torch.bfloat16)
+
+    monkeypatch.setattr(
+        dynamic_sparse_expert, "USE_GATHER_PACK_BACKWARD", False
+    )
+    safe = dynamic_sparse_expert._backward_pack_assignments(
+        values,
+        selected,
+        positions,
+        expert_count=module.expert_count,
+    )
+    monkeypatch.setattr(
+        dynamic_sparse_expert, "USE_GATHER_PACK_BACKWARD", True
+    )
+    candidate = dynamic_sparse_expert._backward_pack_assignments(
+        values,
+        selected,
+        positions,
+        expert_count=module.expert_count,
+    )
+
+    assert torch.equal(candidate, safe)
+
+
+def test_dense_packed_forward_diagnostic_is_explicit(monkeypatch):
+    monkeypatch.setattr(
+        dynamic_sparse_expert,
+        "USE_DENSE_PACKED_FORWARD_DIAGNOSTIC",
+        True,
+    )
+    values = torch.randn(32, 2, 32, dtype=torch.bfloat16)
+    weight = torch.zeros(2, 32, 32, dtype=torch.bfloat16)
+    diagonal = torch.arange(32)
+    weight[:, diagonal, diagonal] = 1
+    bitmap = torch.ones(1, 1, 1, 2, dtype=torch.bfloat16)
+    selected = torch.zeros(32, 1, dtype=torch.int64)
+    actual = dynamic_sparse_expert.dynamic_expert_input_linear(
+        values, weight, bitmap, selected
+    )
+    assert torch.equal(actual, values)
+
+
+def test_block_batched_projection_is_selected_only_and_differentiable():
+    module = _dynamic_moe_projection_fixture()
+    tokens, top_k, width = 64, 2, 32
+    selected, _exact, _blocks = _routing(tokens, module.expert_count, top_k)
+    positions = module._routing_positions(selected)
+    values = torch.randn(
+        tokens, top_k, width, dtype=torch.bfloat16, requires_grad=True
+    )
+    weight = module.routed_weights["down"]
+    actual = dynamic_sparse_expert.dynamic_block_batched_expert_linear(
+        values, weight, selected, positions
+    )
+    token_ids = torch.arange(tokens).unsqueeze(1)
+    expected = torch.bmm(
+        values.reshape(-1, 1, width),
+        weight[selected].reshape(-1, width, width).transpose(1, 2),
+    ).reshape(tokens, top_k, width)
+    assert torch.equal(actual, expected)
+
+    actual.float().square().sum().backward()
+    actual_gradient = values.grad.clone()
+    values.grad = None
+    expected.float().square().sum().backward()
+    assert torch.equal(actual_gradient, values.grad)
+
+
+def test_no_drop_assignment_block_bound_covers_awkward_routing():
+    assert dynamic_sparse_expert.maximum_no_drop_assignment_blocks(
+        tokens=128, assignments=1024, expert_count=32
+    ) == 63
+    assert dynamic_sparse_expert.maximum_no_drop_assignment_blocks(
+        tokens=128, assignments=128, expert_count=32
+    ) == 35
+
+
+def test_block_batched_admission_is_geometry_and_memory_bounded(monkeypatch):
+    monkeypatch.setattr(
+        dynamic_sparse_expert,
+        "MAX_BLOCK_BATCHED_WEIGHT_BYTES",
+        256 << 20,
+    )
+    assert dynamic_sparse_expert.dynamic_block_batched_support_error(
+        tokens=128,
+        top_k=8,
+        expert_count=32,
+        input_features=1024,
+        output_features=1024,
+        element_size=2,
+    ) is None
+    error = dynamic_sparse_expert.dynamic_block_batched_support_error(
+        tokens=128,
+        top_k=8,
+        expert_count=32,
+        input_features=4096,
+        output_features=4096,
+        element_size=2,
+    )
+    assert error is not None
+    assert "weight view exceeds" in error
 
 
 def test_dynamic_no_capacity_projection_matches_assignment_reference_backward():

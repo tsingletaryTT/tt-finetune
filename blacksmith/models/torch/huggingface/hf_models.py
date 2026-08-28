@@ -4,6 +4,7 @@
 import warnings
 import json
 import math
+import types
 from dataclasses import replace
 from fnmatch import fnmatch
 from pathlib import Path
@@ -27,6 +28,156 @@ _TT_TILE_BYTES = {
     "bfp_bf8": 1088,
     "bfp_bf4": 576,
 }
+
+
+def _functional_causal_mask_with_cache_position(
+    attention_mask: torch.Tensor | None,
+    sequence_length: int,
+    target_length: int,
+    dtype: torch.dtype,
+    cache_position: torch.Tensor,
+    batch_size: int,
+    **_kwargs,
+) -> torch.Tensor:
+    """Build the standard HF causal mask without an in-place slice scatter.
+
+    Several decoder implementations spell the padding merge as an in-place
+    slice assignment.  TT-MLIR recognizes that generic scatter as a paged KV
+    cache update, which is not a legal training operation on the current
+    backend.  This formulation is value-identical but keeps the graph purely
+    functional, so it is valid for arbitrary decoder families exposing the
+    standard cache-position mask contract.
+    """
+
+    if attention_mask is not None and attention_mask.dim() == 4:
+        return attention_mask
+
+    min_dtype = torch.finfo(dtype).min
+    causal_mask = torch.full(
+        (sequence_length, target_length),
+        fill_value=min_dtype,
+        dtype=dtype,
+        device=cache_position.device,
+    )
+    if sequence_length != 1:
+        causal_mask = torch.triu(causal_mask, diagonal=1)
+    causal_mask = causal_mask * (
+        torch.arange(target_length, device=cache_position.device)
+        > cache_position.reshape(-1, 1)
+    )
+    causal_mask = causal_mask[None, None, :, :].expand(
+        batch_size, 1, -1, -1
+    )
+    if attention_mask is None:
+        return causal_mask
+
+    mask_length = int(attention_mask.shape[-1])
+    prefix = causal_mask[:, :, :, :mask_length]
+    padding_mask = (
+        prefix
+        + attention_mask[:, None, None, :].to(causal_mask.device)
+    ) == 0
+    prefix = prefix.masked_fill(padding_mask, min_dtype)
+    if mask_length == target_length:
+        return prefix
+    return torch.cat((prefix, causal_mask[:, :, :, mask_length:]), dim=-1)
+
+
+def _install_functional_causal_mask_builders(model: nn.Module) -> int:
+    """Replace the common HF scatter spelling by the functional equivalent."""
+
+    installed = 0
+    for module in model.modules():
+        if not hasattr(
+            module, "_prepare_4d_causal_attention_mask_with_cache_position"
+        ):
+            continue
+        module._prepare_4d_causal_attention_mask_with_cache_position = (
+            _functional_causal_mask_with_cache_position
+        )
+        installed += 1
+    return installed
+
+
+def _functional_fused_qkv_split_heads(
+    module: nn.Module,
+    fused_qkv: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Split an asymmetric fused-QKV tensor using slice views only.
+
+    Advanced single-index lists (for example ``[..., [-2], :]``) lower their
+    backward to additive StableHLO scatter.  TT-MLIR currently interprets that
+    scatter shape as a paged cache update.  Contiguous one-element slices have
+    identical values/shapes and lower to slice/pad gradient assembly instead.
+    """
+
+    batch_size, sequence_length, _ = fused_qkv.shape
+    head_dim = int(module.head_dim)
+    if bool(module.new_decoder_architecture):
+        q_per_kv = int(module.num_heads) // int(module.num_kv_heads)
+        qkv = fused_qkv.view(
+            batch_size,
+            sequence_length,
+            -1,
+            q_per_kv + 2,
+            head_dim,
+        )
+        query = qkv[:, :, :, :-2, :]
+        key = qkv[:, :, :, -2:-1, :].expand_as(query)
+        value = qkv[:, :, :, -1:, :].expand_as(query)
+        return tuple(value.flatten(2, 3) for value in (query, key, value))
+    if not bool(module.multi_query):
+        qkv = fused_qkv.view(
+            batch_size,
+            sequence_length,
+            int(module.num_heads),
+            3,
+            head_dim,
+        )
+        return (
+            qkv[:, :, :, 0:1, :].flatten(2, 3).view(
+                batch_size, sequence_length, int(module.num_heads), head_dim
+            ),
+            qkv[:, :, :, 1:2, :].flatten(2, 3).view(
+                batch_size, sequence_length, int(module.num_heads), head_dim
+            ),
+            qkv[:, :, :, 2:3, :].flatten(2, 3).view(
+                batch_size, sequence_length, int(module.num_heads), head_dim
+            ),
+        )
+    qkv = fused_qkv.view(
+        batch_size,
+        sequence_length,
+        int(module.num_heads) + 2,
+        head_dim,
+    )
+    return qkv[..., :-2, :], qkv[..., -2:-1, :], qkv[..., -1:, :]
+
+
+def _install_functional_fused_qkv_splitters(model: nn.Module) -> int:
+    """Install the slice-only split on compatible fused-QKV attention modules."""
+
+    installed = 0
+    for module in model.modules():
+        if not all(
+            hasattr(module, attribute)
+            for attribute in (
+                "_split_heads",
+                "query_key_value",
+                "head_dim",
+                "num_heads",
+                "num_kv_heads",
+                "new_decoder_architecture",
+                "multi_query",
+            )
+        ):
+            continue
+        module._split_heads = types.MethodType(
+            _functional_fused_qkv_split_heads,
+            module,
+        )
+        installed += 1
+    return installed
 
 
 def _tiled_weight_bytes(parameter, dtype: str) -> int:
@@ -281,6 +432,12 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
     model = AutoModelForCausalLM.from_pretrained(config.model_name, **load_kwargs)
 
     if config.use_tt:
+        model._tt_functional_causal_mask_builders = (
+            _install_functional_causal_mask_builders(model)
+        )
+        model._tt_functional_fused_qkv_splitters = (
+            _install_functional_fused_qkv_splitters(model)
+        )
         from tt_finetune.runtime.training_dropout import (
             config_has_training_dropout,
         )
