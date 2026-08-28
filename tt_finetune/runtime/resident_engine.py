@@ -500,13 +500,19 @@ class ResidentStackEngine:
 
     @property
     def physical_programs_per_step(self) -> int:
-        return (
-            self.forward_owner.physical_programs
-            + 1
-            + self.backward_owner.physical_programs
-            + self.clip_owner.physical_programs
-            + self.adamw_owner.physical_programs
-        )
+        return sum(self.physical_program_breakdown.values())
+
+    @property
+    def physical_program_breakdown(self) -> dict[str, int]:
+        """Expose the actual device-program composition of one resident step."""
+
+        return {
+            "resident_forward": int(self.forward_owner.physical_programs),
+            "final_hidden_publication": 1,
+            "resident_backward": int(self.backward_owner.physical_programs),
+            "gradient_clipping": int(self.clip_owner.physical_programs),
+            "adamw": int(self.adamw_owner.physical_programs),
+        }
 
     def forward_hidden(self, initial_hidden: torch.Tensor) -> torch.Tensor:
         shape = self.packed.shape

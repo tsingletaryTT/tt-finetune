@@ -39,6 +39,7 @@ class ResidentBuildReport:
     physical_plan_fingerprint: str
     public_custom_calls_per_step: int
     physical_programs_per_step: int
+    physical_program_breakdown: dict[str, int]
     batch_size: int
     sequence_length: int
     rank: int
@@ -210,6 +211,7 @@ class ResidentCausalLMExecutor:
             "runtime_source_hash": runtime_source_hash,
             "public_custom_calls_per_step": engine.public_custom_calls_per_step,
             "physical_programs_per_step": engine.physical_programs_per_step,
+            "physical_program_breakdown": engine.physical_program_breakdown,
         }
         self.physical_plan_fingerprint = hashlib.sha256(
             json.dumps(
@@ -227,6 +229,7 @@ class ResidentCausalLMExecutor:
             physical_plan_fingerprint=self.physical_plan_fingerprint,
             public_custom_calls_per_step=engine.public_custom_calls_per_step,
             physical_programs_per_step=engine.physical_programs_per_step,
+            physical_program_breakdown=engine.physical_program_breakdown,
             batch_size=plan.batch_size,
             sequence_length=plan.sequence_length,
             rank=plan.rank,
