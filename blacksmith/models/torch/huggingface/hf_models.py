@@ -4,6 +4,7 @@
 import warnings
 import json
 import math
+from dataclasses import replace
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -367,8 +368,26 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
                 requested_moe_backend=str(getattr(
                     config, "tt_moe_backend", "auto"
                 )),
+                attention_query_chunk_tokens=int(getattr(
+                    config, "tt_attention_query_chunk_tokens", 128
+                )),
+            )
+            from tt_finetune.runtime import public_resident_admission
+
+            resident_admission = public_resident_admission(
+                config, architecture_report.plan
+            )
+            architecture_report = replace(
+                architecture_report,
+                executor_backend=resident_admission.backend,
+                executor_fallback_reason=(
+                    None
+                    if resident_admission.admitted
+                    else resident_admission.reason
+                ),
             )
             model._tt_architecture_report = architecture_report
+            model._tt_public_resident_admission = resident_admission
             if initial_adapter_path:
                 from tt_finetune.integration.sparse_adapter_io import (
                     load_sparse_moe_adapter_extension,
@@ -506,7 +525,14 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
                     device=parameter.device,
                     dtype=torch.float32,
                 )
-    if config.use_tt:
+    resident_public_execution = bool(
+        getattr(
+            getattr(model, "_tt_public_resident_admission", None),
+            "admitted",
+            False,
+        )
+    )
+    if config.use_tt and not resident_public_execution:
         model.to(device)
 
     # The memory planner chooses reduced precision only for frozen
@@ -516,7 +542,7 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
     # the custom_call is visible to TT-MLIR.
     memory_plan = None
     resolved_overrides = {}
-    if config.use_tt:
+    if config.use_tt and not resident_public_execution:
         memory_plan = _plan_frozen_weight_dtype(
             model, getattr(config, "memory_mode", "auto")
         )
@@ -525,7 +551,7 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
             memory_plan,
             getattr(config, "weight_dtype_overrides", None),
         )
-    if config.use_tt and resolved_overrides:
+    if config.use_tt and not resident_public_execution and resolved_overrides:
         from tt_torch import apply_weight_dtype_overrides
 
         applied = apply_weight_dtype_overrides(model, resolved_overrides)
@@ -562,7 +588,7 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
         )
         model._tt_memory_mode_report = memory_plan
 
-    if config.use_tt and compile_model:
+    if config.use_tt and compile_model and not resident_public_execution:
         import torch_xla
 
         reduced_frozen_weights = bool(
@@ -614,6 +640,13 @@ def get_model(config: TrainingConfig, device: torch.device, compile_model: bool 
         if memory_plan is not None:
             memory_plan["xla_compile_options"] = dict(xla_compile_options)
         model = torch.compile(model, backend="tt", options=compile_options)
+
+    if resident_public_execution:
+        # The worker consumes the host PEFT module exactly once to construct
+        # the packed resident ABI.  Moving or compiling it here would create a
+        # duplicate generic graph and make exact checkpoint restoration occur
+        # after packing instead of before it.
+        model._tt_execution_model_state = "host_pending_resident_pack"
 
     return model
 

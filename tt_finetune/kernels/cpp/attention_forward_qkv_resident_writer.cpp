@@ -13,6 +13,7 @@ constexpr uint32_t kTileBytes = 2048, kProjectionColumns = 5;
 constexpr uint32_t kProjectionWorkers = @PROJECTION_WORKERS@, kAttentionColumns = 6;
 constexpr uint32_t kAttentionXOffset = 5;
 constexpr bool kInputRMSNorm = @INPUT_RMSNORM@;
+constexpr bool kPrefixOnly = @PROJECTION_ROPE_PREFIX_ONLY@;
 constexpr bool kDedicatedORank = @DEDICATED_O_RANK@;
 constexpr bool kPostAttentionBlock = @POST_ATTENTION_BLOCK@;
 constexpr bool kFullMLPForward = @FULL_MLP_FORWARD@;
@@ -377,6 +378,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
             rebase_empty_consumer_cb(kNormalizedHidden);
         }
 
+        if constexpr (!kPrefixOnly) {
         // The Q/K/V output FIFOs are also O output FIFOs in the compact
         // layer ABI.  Their consumer pointers can end on a partial physical
         // cycle when a tail core owns an odd number of jobs.  Rebase only
@@ -389,8 +391,18 @@ __attribute__((optimize("Os"))) void kernel_main() {
         qkv_outputs_drained.push_back(1);
         wait_qkv_ack(29);
         qkv_outputs_reuse_ack.pop_front(1);
+        }
+        if constexpr (kPrefixOnly) {
+            // Prefix mode has no O-projection epoch and therefore no compute
+            // reuse acknowledgement.  The writer has nevertheless consumed
+            // every Q/K/V tile at this point, so restore the aliased output
+            // descriptors explicitly before the next layer invocation.
+            rebase_empty_consumer_cb(cb_saved_h);
+            rebase_empty_consumer_cb(cb_output);
+        }
     }
 
+    if constexpr (!kPrefixOnly) {
     uint32_t post_output_base = 0;
     if constexpr (kPostAttentionBlock) {
         auto& post_interface = get_local_cb_interface(13);
@@ -551,6 +563,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
             }
         }
     }
+    }
 
     // One completion epoch covers every projection and active attention
     // writer.  Only after the last final write is visible may a subsequent
@@ -590,7 +603,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
         noc_async_write_barrier();
     }
     noc_semaphore_wait(invocation_done, 1);
-    if constexpr (kInputRMSNorm) {
+    if constexpr (kInputRMSNorm && !kPrefixOnly) {
         rebase_empty_consumer_cb(cb_saved_h);
         rebase_empty_consumer_cb(cb_output);
     }

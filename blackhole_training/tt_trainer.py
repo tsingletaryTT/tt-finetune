@@ -609,8 +609,10 @@ class TTLoRATrainer:
 
     def _container_model_name(self) -> str:
         candidate = Path(self.model_name).expanduser()
-        if candidate.is_absolute() or candidate.exists():
+        if candidate.is_absolute():
             return self._to_container_path(candidate)
+        if candidate.exists():
+            return self._to_container_path(candidate.resolve())
         return self.model_name
 
     def _metadata_model_name(self) -> str:
@@ -626,8 +628,10 @@ class TTLoRATrainer:
         if value is None:
             return None
         candidate = Path(value).expanduser()
-        if candidate.is_absolute() or candidate.exists():
+        if candidate.is_absolute():
             return self._to_container_path(candidate)
+        if candidate.exists():
+            return self._to_container_path(candidate.resolve())
         return value
 
     def _host_path(self, value: str | Path) -> Path:

@@ -1842,6 +1842,7 @@ def build_tt_lang_attention_forward_qkv_resident(
     has_bias: bool = False,
     bias_after_bf16_base: bool = False,
     grouped_qkv_lora: bool = False,
+    active_lora_roles: tuple[str, ...] = ("q", "k", "v", "o"),
     smol_grouped_qkv_lora: bool = False,
     separate_qkv_lora: bool = False,
     precomputed_separate_qkv_delta: bool = False,
@@ -1858,6 +1859,7 @@ def build_tt_lang_attention_forward_qkv_resident(
     rebase_projection_cbs: bool = False,
     dedicated_o_rank_producer: bool = False,
     publish_raw_score_checkpoint: bool = False,
+    projection_rope_prefix_only: bool = False,
 ) -> Callable:
     plan = plan_full_attention_forward(
         tokens=sequence_length,
@@ -1870,6 +1872,10 @@ def build_tt_lang_attention_forward_qkv_resident(
         qkv_bias=has_bias,
         include_attention_block=post_attention_rmsnorm_epsilon is not None,
     )
+    attention_roles = {"q", "k", "v", "o"}
+    active_lora_roles = tuple(dict.fromkeys(active_lora_roles))
+    if not set(active_lora_roles) <= attention_roles:
+        raise ValueError("active attention LoRA roles must be a canonical subset")
     if physical_rank <= 0 or physical_rank % 32 or physical_rank > 128:
         raise ValueError(
             "QKV resident owner requires tiled physical rank up to 128"
@@ -1911,6 +1917,12 @@ def build_tt_lang_attention_forward_qkv_resident(
     if input_rmsnorm and float(input_rmsnorm_epsilon) <= 0.0:
         raise ValueError("input RMSNorm epsilon must be positive")
     post_attention_block = post_attention_rmsnorm_epsilon is not None
+    if projection_rope_prefix_only and (
+        post_attention_block or resident_gate_up_intermediate_features is not None
+    ):
+        raise ValueError(
+            "projection/RoPE prefix-only execution cannot own the post-attention block"
+        )
     if post_attention_block and not input_rmsnorm:
         raise ValueError("post-attention ownership requires resident input RMSNorm")
     if post_attention_block and float(post_attention_rmsnorm_epsilon) <= 0.0:
@@ -2211,6 +2223,7 @@ def build_tt_lang_attention_forward_qkv_resident(
             f"o_init={o_lora_init_schedule}:"
             f"{int(has_bias)}:"
             f"{int(bias_after_bf16_base)}:{int(grouped_qkv_lora)}:"
+            f"targets={','.join(active_lora_roles)}:"
             f"{int(smol_grouped_qkv_lora)}:"
             f"{int(separate_qkv_lora)}:"
             f"predelta={int(precomputed_separate_qkv_delta)}:"
@@ -2226,6 +2239,7 @@ def build_tt_lang_attention_forward_qkv_resident(
             f"rebase_projection_cbs={int(rebase_projection_cbs)}"
             f":dedicated_o_rank={int(dedicated_o_rank_producer)}"
             f":raw_score_checkpoint={int(publish_raw_score_checkpoint)}"
+            f":rope_prefix_only={int(projection_rope_prefix_only)}"
         ).encode()
     ).hexdigest()[:16]
 
@@ -2274,6 +2288,9 @@ def build_tt_lang_attention_forward_qkv_resident(
                     "@FP32_CANONICAL_ATTENTION@": "1",
                     "@PUBLISH_RAW_SCORE_CHECKPOINT@": (
                         "1" if publish_raw_score_checkpoint else "0"
+                    ),
+                    "@PROJECTION_ROPE_PREFIX_ONLY@": (
+                        "1" if projection_rope_prefix_only else "0"
                     ),
                     "@ATTENTION_CHECKPOINT_CB@": (
                         "23" if publish_raw_score_checkpoint else "27"
@@ -2594,6 +2611,7 @@ def build_tt_lang_attention_forward_qkv_resident(
                             o_cb_offset=0 if input_rmsnorm else 15,
                             qkv_o_phase_barrier=input_rmsnorm,
                             precomputed_o_rank_h=dedicated_o_rank_producer,
+                            include_o_projection=not projection_rope_prefix_only,
                         )
                 if input_rmsnorm:
                     projection_compute = _compose_input_rmsnorm_projection_compute(
@@ -2636,7 +2654,8 @@ def build_tt_lang_attention_forward_qkv_resident(
                     projection_writer,
                 )
                 attention_compute_body = _resident_compute_source(
-                    replacements
+                    replacements,
+                    projection_rope_prefix_only=projection_rope_prefix_only,
                 ).replace(
                     "get_absolute_logical_y() * 11 + get_absolute_logical_x()",
                     "get_absolute_logical_y() * 6 + "

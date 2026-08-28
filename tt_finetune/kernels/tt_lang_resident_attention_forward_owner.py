@@ -294,6 +294,7 @@ def build_tt_lang_resident_attention_forward_owner(
     has_bias: bool = False,
     bias_after_bf16_base: bool = False,
     grouped_qkv_lora: bool = False,
+    active_lora_roles: tuple[str, ...] = ("q", "k", "v", "o"),
     canonical_grouped_qkv_rank: bool = False,
     canonical_separate_qkv_rank: bool = False,
     exact_attention_tail: bool = False,
@@ -376,6 +377,7 @@ def build_tt_lang_resident_attention_forward_owner(
         has_bias=has_bias,
         bias_after_bf16_base=bias_after_bf16_base,
         grouped_qkv_lora=grouped_qkv_lora,
+        active_lora_roles=active_lora_roles,
         smol_grouped_qkv_lora=canonical_grouped_qkv_rank,
         separate_qkv_lora=canonical_separate_qkv_rank,
         precomputed_separate_qkv_delta=canonical_separate_qkv_rank,
@@ -386,6 +388,17 @@ def build_tt_lang_resident_attention_forward_owner(
         # exact outer owner consumes the Q/K checkpoints directly and runs
         # the explicitly pinned canonical QK schedule below instead.
         publish_raw_score_checkpoint=False,
+        # The canonical outer owner recomputes the exact attention core and O
+        # projection from the resident Q/K/V checkpoints.  Running the legacy
+        # attention tail and O inside the prefix child was pure duplicate
+        # work.  Compile the child as Q/K/V -> RoPE only and retain the same
+        # private arena handoff.
+        projection_rope_prefix_only=(
+            exact_attention_tail
+            and os.environ.get(
+                "TT_FINETUNE_PROJECTION_ROPE_PREFIX_ONLY", "1"
+            ) != "0"
+        ),
     )
     grouped_rank = (
         build_tt_lang_grouped_qkv_rank_path(
@@ -395,6 +408,10 @@ def build_tt_lang_resident_attention_forward_owner(
         )
         if canonical_grouped_qkv_rank else None
     )
+    target_aware_o = (
+        os.environ.get("TT_FINETUNE_TARGET_AWARE_O", "0") == "1"
+    )
+    o_lora_active = "o" in active_lora_roles or not target_aware_o
     native_o = build_tt_lang_native_lora_o_path(
         tokens=sequence_length,
         hidden_features=hidden_features,
@@ -405,6 +422,7 @@ def build_tt_lang_resident_attention_forward_owner(
         # 128x576 @ 8x576.T SmolLM2 operation.  Keeping this explicit avoids
         # the L1 destination selecting a different one-tile reduction tree.
         rank_k_tiles_per_phase=canonical_rank_k_tiles_per_phase,
+        lora_active=o_lora_active,
     )
     direct_copy = build_tt_lang_owner_aligned_copy(
         rows=sequence_length,
@@ -596,6 +614,7 @@ def build_tt_lang_resident_attention_forward_owner(
         f"q{query_heads}.k{kv_heads}.d{head_dim}.pr{physical_rank}."
         f"lr{logical_rank}.bias{int(has_bias)}."
         f"grouped{int(grouped_qkv_lora)}."
+        f"targets{'-'.join(active_lora_roles) or 'none'}."
         f"canonicalqvk{int(canonical_grouped_qkv_rank)}."
         f"separateqvk{int(canonical_separate_qkv_rank)}."
         f"exacttail{int(exact_attention_tail)}."
@@ -1110,8 +1129,11 @@ def build_tt_lang_resident_attention_forward_owner(
                 _remap_all(
                     head_checkpoint_child, {0: head4_id, 1: arena_id}
                 ),
-                _remap_all(
-                    rank_checkpoint_child, {0: o_rank_id, 1: arena_id}
+                *(
+                    [_remap_all(
+                        rank_checkpoint_child, {0: o_rank_id, 1: arena_id}
+                    )]
+                    if o_lora_active else []
                 ),
                 _remap_all(
                     output_checkpoint_child, {0: o_output_id, 1: arena_id}
@@ -1532,14 +1554,14 @@ def build_tt_lang_resident_attention_forward_owner(
             (
                 1 + rank_prefix_programs
                 + 3 + bf16_core.physical_programs + 1
-                + native_o.physical_programs + 5
+                + native_o.physical_programs + 5 - int(not o_lora_active)
             )
             if canonical_bf16_attention else
             (
                 1 + rank_prefix_programs
                 + 2 + native_qk.physical_programs
                 + 1 + exact_tail.physical_programs + 1 - 1
-                + native_o.physical_programs + 5
+                + native_o.physical_programs + 5 - int(not o_lora_active)
             )
         )
         if exact_attention_tail else

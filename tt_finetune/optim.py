@@ -399,6 +399,39 @@ class TilePackedAdamW(torch.optim.AdamW):
                 output.append((f"parameter.{parameter_index}.{name}", logical))
         return output
 
+    def logical_gradient_tensors(self) -> list[torch.Tensor]:
+        """Reconstruct current packed gradients in logical parameter order.
+
+        This is a qualification/debug boundary.  It deliberately returns
+        views/joins without changing dtype or arithmetic so an evolving-state
+        oracle can compare the exact gradients consumed by packed AdamW.
+        """
+
+        output: list[torch.Tensor] = []
+        segments_by_parameter: list[list[tuple[int, dict[str, int]]]] = [
+            [] for _ in self.model_parameters
+        ]
+        for pack_index, pack in enumerate(self.packs):
+            for segment in pack["segments"]:
+                segments_by_parameter[segment["parameter_index"]].append(
+                    (pack_index, segment)
+                )
+        for parameter, segments in zip(
+            self.model_parameters, segments_by_parameter, strict=True
+        ):
+            pieces = []
+            for pack_index, segment in segments:
+                gradient = self.packed_parameters[pack_index].grad
+                if gradient is None:
+                    raise RuntimeError(
+                        "packed logical-gradient audit ran before gradients were packed"
+                    )
+                start = segment["pack_offset"]
+                stop = start + segment["length"]
+                pieces.append(gradient.reshape(-1)[start:stop])
+            output.append(torch.cat(pieces).reshape_as(parameter))
+        return output
+
     def configure_learning_rate_schedule(
         self,
         values: list[torch.Tensor],

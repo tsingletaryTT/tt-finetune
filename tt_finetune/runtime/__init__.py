@@ -47,9 +47,16 @@ from .execution_planner import (
     resident_qualification_for_plan,
 )
 from .execution_runtime import (
+    PublicResidentAdmission,
     ResidentBuildReport,
     ResidentCausalLMExecutor,
     build_resident_executor,
+    public_resident_admission,
+)
+from .execution_compiler import (
+    CompiledPhysicalPlan,
+    bind_compiled_plan,
+    compile_physical_training_plan,
 )
 from .memory_planner import MemoryEstimate, estimate_memory
 from .autotuner import (
@@ -75,6 +82,10 @@ from .autotune_quality import (
     measurement_objective,
     qualify_autotuner_case,
     select_non_regressing_winner,
+)
+from .resident_training_ops import (
+    ResidentOptimizerCheckpoint,
+    ResidentTrainingOps,
 )
 
 __all__ = [
@@ -110,9 +121,14 @@ __all__ = [
     "PrimitiveSelection",
     "plan_execution",
     "resident_qualification_for_plan",
+    "PublicResidentAdmission",
     "ResidentBuildReport",
     "ResidentCausalLMExecutor",
     "build_resident_executor",
+    "public_resident_admission",
+    "CompiledPhysicalPlan",
+    "bind_compiled_plan",
+    "compile_physical_training_plan",
     "MemoryEstimate",
     "estimate_memory",
     "CandidateMeasurement",
@@ -135,4 +151,6 @@ __all__ = [
     "measurement_objective",
     "qualify_autotuner_case",
     "select_non_regressing_winner",
+    "ResidentOptimizerCheckpoint",
+    "ResidentTrainingOps",
 ]

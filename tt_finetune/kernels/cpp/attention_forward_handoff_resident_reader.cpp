@@ -18,6 +18,7 @@ FORCE_INLINE uint64_t projection_zero_l1(uint32_t address) {
 }
 
 void kernel_main() {
+    constexpr bool prefix_only = @PROJECTION_ROPE_PREFIX_ONLY@;
     constexpr uint32_t cb_q = 0, cb_q_cos = 1, cb_q_sin = 2;
     constexpr uint32_t cb_k = 3, cb_k_cos = 4, cb_k_sin = 5;
     constexpr uint32_t cb_mask = 17;
@@ -89,11 +90,13 @@ void kernel_main() {
             noc0.async_read(sine, CoreLocalMem<uint32_t>(k_sin.get_write_ptr() + local * tile_bytes),
                             tile_bytes, {.page_id = page}, {});
         }
-    mask_cb.reserve_back(seq_tiles);
-    for (uint32_t column = 0; column < seq_tiles; ++column)
-        noc0.async_read(mask,
-            CoreLocalMem<uint32_t>(mask_cb.get_write_ptr() + column * tile_bytes),
-            tile_bytes, {.page_id = row * seq_tiles + column}, {});
+    if constexpr (!prefix_only) {
+        mask_cb.reserve_back(seq_tiles);
+        for (uint32_t column = 0; column < seq_tiles; ++column)
+            noc0.async_read(mask,
+                CoreLocalMem<uint32_t>(mask_cb.get_write_ptr() + column * tile_bytes),
+                tile_bytes, {.page_id = row * seq_tiles + column}, {});
+    }
     noc0.async_read_barrier();
     noc_semaphore_wait_min(q_ready, dim_tiles);
     noc_semaphore_wait_min(k_ready, vector_tiles);
@@ -103,8 +106,9 @@ void kernel_main() {
     q.push_back(dim_tiles); k.push_back(vector_tiles); v.push_back(vector_tiles);
     q_cos.push_back(dim_tiles); q_sin.push_back(dim_tiles);
     k_cos.push_back(vector_tiles); k_sin.push_back(vector_tiles);
-    mask_cb.push_back(seq_tiles);
+    if constexpr (!prefix_only) mask_cb.push_back(seq_tiles);
 
+    if constexpr (!prefix_only) {
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
@@ -135,5 +139,6 @@ void kernel_main() {
     }
     probability_bf16.push_back(seq_tiles); probability_fp32.pop_front(seq_tiles);
 #endif
+    }
     noc_semaphore_wait_min(invocation_done, 2);
 }

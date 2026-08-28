@@ -92,6 +92,7 @@ def build_tt_lang_resident_attention_block_forward_owner(
     attention_scale: float,
     rmsnorm_epsilon: float,
     has_bias: bool = False,
+    active_lora_roles: tuple[str, ...] = ("q", "k", "v", "o"),
     bias_after_bf16_base: bool = False,
     grouped_qkv_lora: bool = False,
     base_k_tiles_per_phase: int = 1,
@@ -138,6 +139,11 @@ def build_tt_lang_resident_attention_block_forward_owner(
         raise ValueError(
             "grouped and separate canonical Q/K/V rank prefixes are exclusive"
         )
+    attention_roles = {"q", "k", "v", "o"}
+    active_lora_roles = tuple(
+        role for role in dict.fromkeys(active_lora_roles)
+        if role in attention_roles
+    )
 
     global ttl, tt_lang_operation
     if ttl is None or tt_lang_operation is None:
@@ -176,6 +182,7 @@ def build_tt_lang_resident_attention_block_forward_owner(
         has_bias=has_bias,
         bias_after_bf16_base=bias_after_bf16_base,
         grouped_qkv_lora=grouped_qkv_lora,
+        active_lora_roles=active_lora_roles,
     )
     if exact_attention_tail:
         attention = build_tt_lang_resident_attention_forward_owner(
@@ -265,6 +272,7 @@ def build_tt_lang_resident_attention_block_forward_owner(
         f"{sequence_length}x{hidden_features}.kv{kv_features}."
         f"q{query_heads}.k{kv_heads}.d{head_dim}.r{physical_rank}."
         f"bias{int(has_bias)}.grouped{int(grouped_qkv_lora)}."
+        f"targets{'-'.join(active_lora_roles) or 'none'}."
         f"stop{debug_stop_after or 'full'}."
         f"oloraphase{o_lora_k_tiles_per_phase}."
         f"nativeo{int(canonical_native_o_path)}."

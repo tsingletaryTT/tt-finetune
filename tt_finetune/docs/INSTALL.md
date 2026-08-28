@@ -6,7 +6,7 @@ Install the supplied wheel into a clean Python virtual environment:
 ```bash
 python3 -m venv .venv
 . .venv/bin/activate
-python -m pip install ./tt_finetune-0.2.0-py3-none-any.whl
+python -m pip install ./tt_finetune-0.2.1rc1-cp312-cp312-linux_x86_64.whl
 tt-finetune doctor
 ```
 

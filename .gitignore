@@ -6,6 +6,7 @@ __pycache__/
 venv/
 build/
 dist/
+/generated/
 *.whl
 *.log
 *.pth

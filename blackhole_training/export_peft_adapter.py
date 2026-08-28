@@ -48,7 +48,7 @@ def main():
         "--metadata-base-model",
         help=(
             "Portable model ID/path written to adapter_config.json. This "
-            "prevents a container-only /workspace path leaking into a "
+            "prevents a container-only build path leaking into a "
             "standard PEFT export."
         ),
     )

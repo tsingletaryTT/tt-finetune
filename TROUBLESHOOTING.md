@@ -43,6 +43,23 @@ This is expected when the lower-level cache cannot satisfy the request. Current
 PJRT cannot deserialize a complete executable across processes. Use persistent
 runtime mode for safe same-process reuse.
 
+## Another training job is already active
+
+A P150a persistent runtime admits one training owner. Finish or interrupt the
+reported job before starting another. If the owner crashes, its connection
+lease terminates the package-owned runtime so the card is released; resume from
+the latest completed checkpoint. Do not start a second service or delete its
+socket while the reported owner is still alive.
+
+## TLB-window allocation failure
+
+Only one process may own the P150a mappings used by TT-Metal. Current
+`tt-finetune` releases an idle package-owned persistent runtime before an
+isolated profiling or memory-measurement job and refuses to interrupt an active
+training owner. If `tt_tlb_alloc` still fails, check for an unrelated TT
+process using the device, finish that job, and retry. Do not delete runtime
+sockets or kill an active owner without first preserving its checkpoint.
+
 ## Resume rejected
 
 The checkpoint data or model contract differs from the current run. Restore the

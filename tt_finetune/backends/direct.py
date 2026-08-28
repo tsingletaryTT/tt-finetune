@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import signal
+import stat
 import statistics
 import subprocess
 import sys
@@ -25,6 +26,46 @@ from ..config import IA3Config, LoRAConfig
 from ..errors import TTDependencyError, classify_runtime_error
 
 
+_UNIX_SOCKET_PATH_LIMIT = 107
+
+
+def _short_runtime_socket_path(workspace: Path) -> Path:
+    """Return a private, workspace-stable AF_UNIX path below Linux's limit.
+
+    The public workspace is intentionally allowed to live below an arbitrary
+    user-selected cache/home directory.  AF_UNIX does not share that freedom:
+    Linux limits ``sun_path`` to 108 bytes including its terminator.  Keep
+    durable service metadata in the workspace, but address the local service
+    through a short per-user runtime directory keyed by the resolved workspace.
+    """
+
+    uid = os.getuid()
+    identity = hashlib.sha256(
+        os.fsencode(str(workspace.expanduser().resolve()))
+    ).hexdigest()[:20]
+    candidates = []
+    xdg_runtime = os.environ.get("XDG_RUNTIME_DIR")
+    if xdg_runtime:
+        candidates.append(Path(xdg_runtime) / "tt-finetune")
+    candidates.append(Path("/tmp") / f"tt-finetune-{uid}")
+    for root in candidates:
+        socket_path = root / f"rt-{identity}.sock"
+        if len(os.fsencode(str(socket_path))) > _UNIX_SOCKET_PATH_LIMIT:
+            continue
+        try:
+            root.mkdir(mode=0o700, parents=True, exist_ok=True)
+            metadata = root.lstat()
+        except OSError:
+            continue
+        if not stat.S_ISDIR(metadata.st_mode) or metadata.st_uid != uid:
+            continue
+        os.chmod(root, 0o700)
+        return socket_path
+    raise RuntimeError(
+        "no safe AF_UNIX path is short enough for the persistent TT runtime"
+    )
+
+
 def _percentile_local(values: tuple[float, ...], fraction: float) -> float:
     ordered = sorted(values)
     position = fraction * (len(ordered) - 1)
@@ -32,6 +73,42 @@ def _percentile_local(values: tuple[float, ...], fraction: float) -> float:
     upper = min(len(ordered) - 1, lower + 1)
     weight = position - lower
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
+
+
+def _native_runtime_failure_diagnostic(
+    log_path: Path,
+    *,
+    start_offset: int,
+) -> dict[str, Any] | None:
+    """Extract a structured failure emitted outside PJRT's StatusOr.
+
+    TT-Metal writes allocator failures to the persistent service's stderr,
+    while current PJRT sometimes returns only ``INTERNAL: Error code: 13``.
+    Reading only bytes appended by this job prevents a historical failure in
+    the shared log from being attributed to a later request.
+    """
+
+    try:
+        with log_path.open("rb") as source:
+            source.seek(max(0, int(start_offset)))
+            text = source.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    from ..memory import parse_tt_oom_boundary
+
+    oom = parse_tt_oom_boundary(text)
+    if oom is None:
+        return None
+    return {
+        "kind": "device_dram_out_of_memory",
+        "message": (
+            "TT-Metal device DRAM is out of memory at an allocation "
+            "boundary; reduce model size, sequence length, batch size, or "
+            "adapter rank. Fragmentation can make the largest free block "
+            "smaller than aggregate free memory."
+        ),
+        "allocator": oom,
+    }
 
 
 class DirectBlackholeBackend(BlackholeXlaBackend):
@@ -85,12 +162,25 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
 
     def _persistent_cache_id(self, report: dict[str, Any]) -> str:
         plan = report.get("execution_plan", {})
+        selected_worker_arguments = self._selected_worker_arguments()
+        data_config = getattr(self, "data_config", None)
+        sequence_buckets = getattr(data_config, "sequence_buckets", None)
         contract = {
             "compile_cache_id": self._compile_cache_id(),
             "architecture": report.get("architecture_descriptor"),
             "canonical_targets": report.get("canonical_lora_target_paths"),
             "execution_plan": plan,
             "graph_arguments": self._graph_worker_arguments(report),
+            "selected_worker_arguments": selected_worker_arguments,
+            "data_compile_shapes": {
+                "sequence_bucketing": getattr(
+                    data_config, "sequence_bucketing", "auto"
+                ),
+                "sequence_buckets": (
+                    list(sequence_buckets)
+                    if sequence_buckets is not None else None
+                ),
+            },
             "optimizer": {
                 "layout": self.args.optimizer_layout,
                 "pack_bytes": self.args.optimizer_pack_bytes,
@@ -125,6 +215,9 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         root.mkdir(parents=True, exist_ok=True)
         return root
 
+    def _persistent_socket_path(self) -> Path:
+        return _short_runtime_socket_path(self._engine.workspace)
+
     def _persistent_container_name(self) -> str:
         identity = hashlib.sha256(
             str(self._engine.workspace).encode("utf-8")
@@ -134,27 +227,119 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
     def _persistent_container_path(self, path: Path) -> str:
         return self._engine._to_container_path(path)
 
-    def _service_status(self, socket_path: Path) -> dict[str, Any] | None:
+    def _service_status(
+        self,
+        socket_path: Path,
+        *,
+        info_path: Path | None = None,
+    ) -> dict[str, Any] | None:
         if not socket_path.exists():
             return None
         try:
             from ..service_client import request
 
-            return request(socket_path, {"action": "status"})
+            return request(
+                socket_path,
+                {"action": "status"},
+                timeout_seconds=1.0,
+            )
         except (OSError, RuntimeError, ValueError, json.JSONDecodeError):
-            return None
+            # The runtime server intentionally serializes accelerator jobs.
+            # A synchronous train handler cannot answer status until the job
+            # ends, so use its atomically published state instead of blocking
+            # a second public API call indefinitely.
+            info_path = info_path or socket_path.parent / "runtime_info.json"
+            try:
+                status = json.loads(info_path.read_text(encoding="utf-8"))
+                pid = int(status.get("pid") or 0)
+                if pid <= 1:
+                    return None
+                os.kill(pid, 0)
+                return status
+            except (
+                OSError,
+                RuntimeError,
+                ValueError,
+                json.JSONDecodeError,
+            ):
+                return None
+
+    def _stop_persistent_service(
+        self,
+        socket_path: Path,
+        status: dict[str, Any] | None = None,
+        *,
+        expected_active_job: str | None = None,
+        info_path: Path | None = None,
+    ) -> bool:
+        """Release an idle service or the exact abandoned job we own."""
+
+        info_path = info_path or socket_path.parent / "runtime_info.json"
+        status = status or self._service_status(
+            socket_path, info_path=info_path
+        )
+        if status is None:
+            return False
+        active_job = status.get("active_job")
+        if active_job and active_job != expected_active_job:
+            raise RuntimeError(
+                "the persistent TT runtime is executing another training job; "
+                "finish or interrupt that job before starting an isolated "
+                "device run"
+            )
+        pid = int(status.get("pid") or 0)
+        if pid <= 1 or pid == os.getpid():
+            raise RuntimeError("persistent TT runtime reported an invalid PID")
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.1)
+        else:
+            os.kill(pid, signal.SIGKILL)
+        socket_path.unlink(missing_ok=True)
+        info_path.unlink(missing_ok=True)
+        return True
+
+    def _cancel_owned_persistent_job(
+        self,
+        socket_path: Path,
+        job_id: str,
+    ) -> bool:
+        """Cancel only the package service still running this exact job."""
+
+        info_path = self._persistent_root() / "runtime_info.json"
+        status = self._service_status(socket_path, info_path=info_path)
+        if status is None or status.get("active_job") != job_id:
+            return False
+        return self._stop_persistent_service(
+            socket_path,
+            status,
+            expected_active_job=job_id,
+            info_path=info_path,
+        )
 
     def _ensure_persistent_service(self) -> tuple[Path, dict[str, Any]]:
         root = self._persistent_root()
-        socket_path = root / "runtime.sock"
+        socket_path = self._persistent_socket_path()
         info_path = root / "runtime_info.json"
         fingerprint = self._direct_fingerprint()
-        status = self._service_status(socket_path)
+        status = self._service_status(socket_path, info_path=info_path)
         if (
             status is not None
             and status.get("fingerprint") == fingerprint
         ):
             return socket_path, status
+        if status is not None:
+            self._stop_persistent_service(
+                socket_path, status, info_path=info_path
+            )
         socket_path.unlink(missing_ok=True)
         info_path.unlink(missing_ok=True)
         log_path = root / "runtime_service.log"
@@ -163,6 +348,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             "PJRT_DEVICE": "TT",
             "XLA_STABLEHLO_COMPILE": "1",
             "WANDB_MODE": "disabled",
+            "TT_FINETUNE_RUNTIME_SOURCE_HASH": fingerprint,
         })
         command = [
             sys.executable, "-m", "tt_finetune.runtime_service",
@@ -183,7 +369,7 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         log.close()
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
-            status = self._service_status(socket_path)
+            status = self._service_status(socket_path, info_path=info_path)
             if status is not None:
                 return socket_path, status
             time.sleep(0.25)
@@ -209,15 +395,26 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
 
     def _direct_fingerprint(self) -> str:
         root = Path(__file__).resolve().parents[2]
+        engine_fingerprint = self._engine._engine_fingerprint()
+        cache_identity = (
+            engine_fingerprint,
+            str(root.resolve()),
+            str(self._engine.workspace.resolve()),
+        )
+        cached = getattr(self, "_direct_fingerprint_cached", None)
+        if cached is not None and cached[0] == cache_identity:
+            return cached[1]
         paths = (
             "tt_finetune/runtime/loop.py",
             "tt_finetune/runtime/torch_xla_ops.py",
             "tt_finetune/runtime/training_dropout.py",
             "tt_finetune/runtime/memory_planner.py",
+            "tt_finetune/runtime/execution_planner.py",
             "tt_finetune/runtime/autotuner.py",
             "tt_finetune/data_pipeline.py",
             "tt_finetune/capabilities.py",
             "tt_finetune/kernels/streamed_causal_attention.py",
+            "tt_finetune/kernels/dynamic_sparse_expert.py",
             "tt_finetune/optim.py",
             "tt_finetune/worker.py",
             "tt_finetune/config.py",
@@ -226,17 +423,73 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             "tt_finetune/service_client.py",
             "blacksmith/datasets/torch/jsonl_causal/jsonl_causal_dataset.py",
             "blacksmith/tools/checkpoints_manager.py",
+            "blacksmith/tools/templates/configs.py",
+            "blacksmith/experiments/torch/qwen/configs.py",
+            "blacksmith/models/torch/huggingface/hf_models.py",
+            "blacksmith/tools/logging_manager.py",
             "blacksmith/tools/workaround_utils.py",
+            "tt_finetune/integration/architecture_runtime.py",
             "tt_finetune/integration/grouped_peft.py",
             "tt_finetune/integration/resident_attention.py",
+            "tt_finetune/integration/sparse_moe.py",
+            "tt_finetune/integration/streamed_attention.py",
             "tt_finetune/kernels/native_grouped_lora_autograd.py",
             "tt_finetune/kernels/native_full_attention_autograd.py",
             "tt_finetune/kernels/tt_lang_output_attention_resident_backward.py",
+            # Resident execution is assembled from generated TT-Metal sources.
+            # These files must participate explicitly even when a measured
+            # planner candidate and its semantic geometry are unchanged.
+            "tt_finetune/kernels/tt_lang_multi_layer_gradient_arena_schedule.py",
+            "tt_finetune/kernels/tt_lang_resident_layer_forward_compact_owner.py",
+            "tt_finetune/kernels/tt_lang_resident_attention_forward_owner.py",
+            "tt_finetune/kernels/tt_lang_resident_attention_block_forward_owner.py",
+            "tt_finetune/kernels/tt_lang_attention_forward_qkv_resident.py",
+            "tt_finetune/kernels/tt_lang_attention_forward_resident.py",
+            "tt_finetune/kernels/cpp/attention_forward_prefix_compute.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_core_compute.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_handoff_resident_reader.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_resident_reader.cpp",
+            "tt_finetune/kernels/cpp/attention_forward_resident_writer.cpp",
+            "tt_finetune/runtime/resident_engine.py",
+            "tt_finetune/runtime/resident_training_ops.py",
+            "tt_finetune/runtime/execution_runtime.py",
         )
-        digest = hashlib.sha256(
-            self._engine._engine_fingerprint().encode("utf-8")
-        )
-        for relative in paths:
+        # The literal list above documents the most sensitive ABI boundary and
+        # keeps compatibility tests readable.  The recursive inventory is the
+        # actual safety net: adding a new resident kernel must invalidate the
+        # compile/profile cache without somebody remembering to edit a second
+        # allowlist.  Only source and frozen execution artifacts participate;
+        # interpreter caches and generated qualification output do not.
+        tracked = set(paths)
+        tree_suffixes = {
+            "tt_finetune/runtime": {".py"},
+            "tt_finetune/integration": {".py"},
+            "tt_finetune/kernels": {".py", ".cpp", ".h", ".hpp"},
+            "tt_finetune/_resident_bundles": {
+                ".json", ".cpp", ".h", ".hpp"
+            },
+        }
+        for relative_root, suffixes in tree_suffixes.items():
+            base = root / relative_root
+            if not base.is_dir():
+                base = self._engine.workspace / relative_root
+            if not base.is_dir():
+                raise TTDependencyError(
+                    "Cannot fingerprint required direct-runtime source tree: "
+                    f"{relative_root}"
+                )
+            for path in base.rglob("*"):
+                if (
+                    path.is_file()
+                    and path.suffix in suffixes
+                    and "__pycache__" not in path.parts
+                ):
+                    tracked.add(
+                        f"{relative_root}/{path.relative_to(base).as_posix()}"
+                    )
+
+        digest = hashlib.sha256(engine_fingerprint.encode("utf-8"))
+        for relative in sorted(tracked):
             path = root / relative
             if not path.is_file():
                 path = self._engine.workspace / relative
@@ -248,7 +501,9 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 )
             digest.update(relative.encode("utf-8"))
             digest.update(path.read_bytes())
-        return digest.hexdigest()[:20]
+        value = digest.hexdigest()[:20]
+        self._direct_fingerprint_cached = (cache_identity, value)
+        return value
 
     def _direct_registry_config(self, path: Path) -> dict[str, Any]:
         config = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -330,6 +585,16 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         )
         return arguments
 
+    def _selected_worker_arguments(self) -> tuple[str, ...]:
+        """Return the complete measured runtime ABI, if one was selected."""
+
+        selected = getattr(self, "_selected_execution_candidate", None)
+        if selected is None:
+            return ()
+        from ..runtime import candidate_worker_arguments
+
+        return candidate_worker_arguments(selected)
+
     def _execution_profile_contract(
         self, automatic_plan: dict[str, Any]
     ) -> dict[str, Any]:
@@ -362,6 +627,58 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         """Measure a bounded set of currently executable whole-step plans."""
 
         support = self._memory_support()
+        # Production train() consumes one deterministic compiler result for
+        # every supported backend.  It never looks up a measured winner and
+        # never benchmarks candidates, even if the legacy ``auto_tune`` flag
+        # is present.  Explicit compile_profile() passes ``force=True`` and is
+        # retained as an offline calibration/qualification facility.
+        if not force:
+            compiled = getattr(support, "compiled_plan", None)
+            if compiled is None:
+                raise RuntimeError(
+                    "the deterministic hardware compiler did not emit an "
+                    "executable physical plan for an admitted training request"
+                )
+            from ..runtime import (
+                bind_compiled_plan,
+                execution_candidate_from_dict,
+            )
+
+            runtime_source_hash = self._direct_fingerprint()
+            selected = bind_compiled_plan(
+                compiled,
+                compiler_hash=self._engine._engine_fingerprint(),
+                runtime_source_hash=runtime_source_hash,
+            )
+            if selected.get("execution_backend") != support.execution_path:
+                raise RuntimeError(
+                    "emitted execution plan is not the admitted executable "
+                    f"backend: {selected.get('execution_backend')!r} != "
+                    f"{support.execution_path!r}"
+                )
+            candidate_document = selected.get("execution_candidate")
+            self._selected_execution_candidate = (
+                execution_candidate_from_dict(candidate_document)
+                if candidate_document is not None else None
+            )
+            return {
+                "profile_key": selected["physical_plan_id"],
+                "selection_status": "deterministic_compiled",
+                "cache_status": "not_consulted",
+                "cache_reason": (
+                    "normal training compiles one source-bound physical plan"
+                ),
+                "selected": selected,
+                "request_contract": selected["request_contract"],
+                "measurements": [],
+                "qualification": {
+                    "measured": False,
+                    "training_state_reused": False,
+                    "selection_authority": selected["selection_authority"],
+                    "online_candidate_search": False,
+                    "measured_profile_cache_consulted": False,
+                },
+            }
         automatic = support.automatic_plan
         if not automatic:
             if not (self.args.auto_tune or force):
@@ -397,11 +714,56 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 "cache_reason": cache_reason,
             }
         if not (self.args.auto_tune or force):
-            # Ordinary training consumes a compatible measured winner
-            # automatically but does not launch an unexpected multi-candidate
-            # tuning search on a cache miss. ``trainer.compile()`` or
-            # ``auto_tune=True`` performs that explicit bounded search.
-            return None
+            # A cache miss must still consume the planner's admitted static
+            # execution contract.  Falling back to the legacy CLI defaults is
+            # not equivalent: in particular, a large reduced-weight graph may
+            # export the complete autograd-saved forward boundary and fragment
+            # P150a DRAM even though the geometry planner selected the proven
+            # forward/backward-fused schedule.  This is an analytical/default
+            # selection, never mislabeled as a measured autotuning result.
+            selected_document = automatic.get("selected") or {}
+            selected = execution_candidate_from_dict(selected_document)
+            if not selected.admitted:
+                raise RuntimeError(
+                    "the geometry-aware planner selected a rejected static "
+                    f"candidate {selected.candidate_id}: "
+                    + "; ".join(selected.rejection_reasons)
+                )
+            self._selected_execution_candidate = selected
+            return {
+                **automatic,
+                "profile_key": profile_key,
+                "selection_status": "analytical_unmeasured",
+                "cache_status": "miss",
+                "cache_reason": cache_reason,
+                "selected": selected.to_dict(),
+                "request_contract": contract,
+                "measurements": [],
+                "qualification": {
+                    "measured": False,
+                    "training_state_reused": False,
+                    "selection_authority": (
+                        "admitted static geometry plan"
+                    ),
+                    "note": (
+                        "Call trainer.compile() or set auto_tune=True to "
+                        "measure alternative plans."
+                    ),
+                },
+            }
+
+        if self.args.runtime_mode == "persistent":
+            # Candidate authorities run in fresh PJRT processes. An idle
+            # long-lived service still owns device mappings and can make the
+            # first candidate fail with a misleading TLB/NOC admission error.
+            # Release it before profiling; the selected plan is materialized
+            # into a new service after the search completes.
+            runtime_root = self._persistent_root()
+            socket_path = self._persistent_socket_path()
+            self._stop_persistent_service(
+                socket_path,
+                info_path=runtime_root / "runtime_info.json",
+            )
 
         candidates = [
             execution_candidate_from_dict(item)
@@ -420,21 +782,19 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             signature = candidate_worker_arguments(candidate)
             by_runtime.setdefault(signature, candidate)
         candidates = list(by_runtime.values())
-        current_partition = (
-            "monolithic" if self._use_monolithic_step(report) else
-            "phase_split_auto"
-            if self.args.execution_graph_layout == "auto" else
-            "phase_split_forward"
+        # The analytical planner's selected candidate is the static authority.
+        # Reconstructing it from CLI defaults was subtly wrong for large
+        # reduced-weight graphs: the planner selected the capacity-safe fused
+        # boundary while this path silently put the materializing phase split
+        # back first. Candidate identity is semantic/runtime-keyed, so consume
+        # the planner selection verbatim.
+        selected_id = str(
+            (automatic.get("selected") or {}).get("candidate_id") or ""
         )
-        reference = next((
-            item for item in candidates
-            if item.graph_partition == current_partition
-            and item.optimizer_pack_bytes == self.args.optimizer_pack_bytes
-            and item.optimizer_packing_strategy
-            == self.args.optimizer_packing_strategy
-            and item.attention_strategy == "auto"
-            and item.peft_strategy == "framework_safe"
-        ), candidates[0])
+        reference = next(
+            (item for item in candidates if item.candidate_id == selected_id),
+            candidates[0],
+        )
         candidates = list(adaptive_candidate_portfolio(
             candidates,
             static_candidate_id=reference.candidate_id,
@@ -516,13 +876,32 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                             f"candidate {candidate.candidate_id} installed no "
                             "resident attention owner"
                         )
-            if candidate.moe_schedule == "expert_capacity_bucketed":
+            if candidate.moe_schedule is not None:
                 paths = metrics.get("moe_execution_paths") or {}
                 if int(paths.get(candidate.moe_schedule) or 0) <= 0:
                     raise RuntimeError(
                         f"candidate {candidate.candidate_id} requested "
                         f"{candidate.moe_schedule}, but its measured worker "
                         f"reported MoE paths {paths}"
+                    )
+                install = (
+                    (metrics.get("architecture") or {}).get("moe_install")
+                    or {}
+                )
+                expected_backend = {
+                    "assignment_weight_gather": "safe",
+                    "expert_capacity_bucketed": "sparse",
+                    "dynamic_native_expert_bucketed": "dynamic",
+                }[candidate.moe_schedule]
+                if (
+                    install.get("backend") != expected_backend
+                    or install.get("host_token_routing_loop") is not False
+                    or install.get("evaluates_all_experts") is not False
+                ):
+                    raise RuntimeError(
+                        f"candidate {candidate.candidate_id} did not realize "
+                        "the requested selected-only device MoE contract: "
+                        f"{install}"
                     )
             samples = tuple(
                 float(value) * 1000.0
@@ -582,10 +961,13 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                 oracle = state
             numerical_contract = reduced_contract(metrics)
             deterministic_replay_required = bool(
-                not state_matches_oracle
-                and numerical_contract
+                numerical_contract
                 and numerical_contract.startswith("deterministic_native_")
                 and finite_training_state(metrics)
+                and (
+                    not state_matches_oracle
+                    or candidate.graph_partition == "forward_backward_fused"
+                )
             )
             if not state_matches_oracle and not deterministic_replay_required:
                 rejected.append({
@@ -944,12 +1326,13 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         resolved: Path,
         report: dict[str, Any],
     ) -> dict[str, Any]:
-        """Materialize the selected executable in the long-lived service.
+        """Materialize selected bucket executables in the long-lived service.
 
-        The one-step job owns fresh temporary model/optimizer/RNG state and
-        discards it when complete. Only process-owned compiler/executable
+        The bounded warmup job owns fresh temporary model/optimizer/RNG state
+        and discards it when complete. Only process-owned compiler/executable
         caches survive, which lets the later public train job start from a
-        clean state while avoiding the cold PJRT compile in the same service.
+        clean state while avoiding cold per-bucket PJRT compiles in the same
+        service.
         """
 
         _, status = self._ensure_persistent_service()
@@ -968,6 +1351,23 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             / f"{cache_key}-{uuid.uuid4().hex[:10]}"
         )
         output_host.mkdir(parents=True, exist_ok=False)
+        from ..data_pipeline import normalize_sequence_buckets
+
+        bucketed = self.data_config.sequence_bucketing is not False
+        boundaries = (
+            normalize_sequence_buckets(
+                self.args.max_seq_length or self.model.max_seq_length,
+                self.data_config.sequence_buckets,
+            )
+            if bucketed else (
+                self.args.max_seq_length or self.model.max_seq_length,
+            )
+        )
+        # Use a real batch from each populated bucket in explicit round-robin
+        # order. Four passes provide a bounded executable-reuse check without
+        # relying on a rare shape appearing early in the shuffled epoch.
+        compile_bucket_repeats = 4
+        warmup_steps = max(1, compile_bucket_repeats * len(boundaries))
         metrics = self._execute_persistent(
             resolved=resolved,
             report=report,
@@ -976,15 +1376,35 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             resume=False,
             stop_after=None,
             telemetry_path=output_host / "telemetry.json",
-            max_steps_override=1,
+            max_steps_override=warmup_steps,
+            compile_sequence_buckets=boundaries,
+            compile_bucket_repeats=compile_bucket_repeats,
         )
         runtime = metrics.get("persistent_runtime") or {}
+        observed_sequence_lengths = sorted({
+            int(value)
+            for step in metrics.get("step_sequence_lengths", [])
+            for value in step
+        })
+        if not observed_sequence_lengths:
+            observed_sequence_lengths = sorted(set(
+                int(value)
+                for value in metrics.get("step_padded_tokens", [])
+            ))
         return {
             "status": "executable_ready",
             "cache_status": runtime.get("client_cache_status", "miss"),
             "cache_key": cache_key,
             "warmup_job_executed": True,
             "warmup_metrics": str(output_host / "training_metrics.json"),
+            "warmup_steps": warmup_steps,
+            "planned_sequence_buckets": list(boundaries),
+            "observed_sequence_buckets": observed_sequence_lengths,
+            "empty_sequence_buckets": (
+                metrics.get("compile_warmup_schedule", {})
+                .get("empty_buckets", [])
+            ),
+            "schedule": metrics.get("compile_warmup_schedule"),
             "same_process_reuse": True,
             "training_state_reused": False,
         }
@@ -1134,10 +1554,31 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         command = list(arguments)
         environment = os.environ.copy()
         environment["WANDB_MODE"] = "disabled"
+        # In an editable development install the subprocess intentionally
+        # runs from the isolated public workspace.  That workspace contains
+        # ``blackhole_training/generated`` and therefore looks like a Python
+        # namespace package.  The default setuptools editable finder is
+        # appended after PathFinder, so the empty workspace namespace can
+        # shadow the real package before the finder is consulted.  A wheel
+        # install does not have this ambiguity.  Make the source root explicit
+        # only for an actual editable checkout; installed wheels remain fully
+        # package-relative and need no path injection.
+        source_root = Path(__file__).resolve().parents[2]
+        if (
+            (source_root / "pyproject.toml").is_file()
+            and (source_root / "blackhole_training" / "__init__.py").is_file()
+        ):
+            existing_pythonpath = environment.get("PYTHONPATH")
+            environment["PYTHONPATH"] = os.pathsep.join(
+                part
+                for part in (str(source_root), existing_pythonpath)
+                if part
+            )
         if device:
             environment.update({
                 "PJRT_DEVICE": "TT",
                 "XLA_STABLEHLO_COMPILE": "1",
+                "TT_FINETUNE_RUNTIME_SOURCE_HASH": self._direct_fingerprint(),
             })
             environment.update(device_environment or {})
         if device:
@@ -1297,6 +1738,34 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             "audit_training_state": self.args.audit_training_state,
             "profile_phases": self.args.profile_product_boundaries,
         }
+        selected = getattr(self, "_selected_execution_candidate", None)
+        if selected is not None:
+            options.update({
+                "optimizer_tile_packed": True,
+                "optimizer_pack_bytes": selected.optimizer_pack_bytes,
+                "optimizer_packing_strategy": (
+                    selected.optimizer_packing_strategy
+                ),
+                "attention_query_block": selected.attention_query_block,
+                "attention_backend": (
+                    "safe"
+                    if selected.attention_strategy == "safe_streamed"
+                    else "native"
+                    if selected.attention_strategy == "native_streamed"
+                    else "auto"
+                ),
+                "peft_execution_strategy": selected.peft_strategy,
+                "moe_execution_strategy": (
+                    "dynamic"
+                    if selected.moe_schedule
+                    == "dynamic_native_expert_bucketed"
+                    else "sparse"
+                    if selected.moe_schedule == "expert_capacity_bucketed"
+                    else "safe"
+                    if selected.moe_schedule == "assignment_weight_gather"
+                    else "auto"
+                ),
+            })
         mapping = {
             "--fuse-step": "fuse_step",
             "--split-clip-optimizer": "split_clip_optimizer",
@@ -1321,9 +1790,22 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         stop_after: int | None,
         telemetry_path: Path,
         max_steps_override: int | None = None,
+        compile_sequence_buckets: tuple[int, ...] | None = None,
+        compile_bucket_repeats: int = 4,
     ) -> dict[str, Any]:
-        socket_path, _ = self._ensure_persistent_service()
+        socket_path, service_status = self._ensure_persistent_service()
+        if service_status.get("active_job"):
+            raise RuntimeError(
+                "the persistent TT runtime is already executing training job "
+                f"{service_status['active_job']}; wait for it to finish or "
+                "interrupt its owning TTTrainer call before starting another"
+            )
         runtime_root = self._persistent_root()
+        service_log_path = runtime_root / "runtime_service.log"
+        try:
+            service_log_start = service_log_path.stat().st_size
+        except OSError:
+            service_log_start = 0
         cache_path = runtime_root / "xla_cache" / self._direct_fingerprint()
         cache_path.mkdir(parents=True, exist_ok=True)
         job_id = f"{int(time.time())}-{uuid.uuid4().hex[:10]}"
@@ -1357,6 +1839,13 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         }
         if stop_after is not None:
             payload["run_options"]["stop_after"] = stop_after
+        if compile_sequence_buckets is not None:
+            payload["run_options"]["compile_sequence_buckets"] = list(
+                compile_sequence_buckets
+            )
+            payload["run_options"]["compile_bucket_repeats"] = int(
+                compile_bucket_repeats
+            )
         request_path.write_text(
             json.dumps(payload, indent=2) + "\n", encoding="utf-8"
         )
@@ -1377,24 +1866,89 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
         ]
         log_path = telemetry_path.with_suffix(".runtime.log")
         client_started = time.perf_counter()
+        last_stage = None
+        last_heartbeat = client_started
         with log_path.open("w", encoding="utf-8") as log:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 command,
                 cwd=self._engine.workspace,
                 text=True,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
+            try:
+                while process.poll() is None:
+                    metrics_path = host_output / "training_metrics.json"
+                    stage = None
+                    if metrics_path.is_file():
+                        try:
+                            current = json.loads(
+                                metrics_path.read_text(encoding="utf-8")
+                            )
+                            stage = (
+                                current.get("startup_profile", {})
+                                .get("current_stage")
+                            )
+                        except (json.JSONDecodeError, OSError):
+                            # A concurrently published progress file can be
+                            # observed between filesystem operations on exotic
+                            # filesystems. The worker uses atomic replace, but
+                            # retrying here keeps old release workers safe too.
+                            stage = None
+                    now = time.perf_counter()
+                    if stage and stage != last_stage:
+                        print(
+                            f"tt-finetune | {stage.replace('_', ' ')} | "
+                            f"{now - client_started:.1f}s elapsed",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        last_stage = stage
+                        last_heartbeat = now
+                    elif now - last_heartbeat >= 60:
+                        label = (
+                            stage.replace("_", " ")
+                            if stage else "starting runtime job"
+                        )
+                        print(
+                            f"tt-finetune | {label} | "
+                            f"{now - client_started:.1f}s elapsed",
+                            file=sys.stderr,
+                            flush=True,
+                        )
+                        last_heartbeat = now
+                    time.sleep(1)
+                return_code = process.wait()
+            except BaseException:
+                if process.poll() is None:
+                    os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        process.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
+                self._cancel_owned_persistent_job(socket_path, job_id)
+                raise
         client_elapsed = time.perf_counter() - client_started
         response = (
             json.loads(response_path.read_text(encoding="utf-8"))
             if response_path.is_file()
             else None
         )
-        if completed.returncode or not response or response.get("status") != "completed":
+        if return_code or not response or response.get("status") != "completed":
+            self._cancel_owned_persistent_job(socket_path, job_id)
             detail = response or {
                 "client_log": log_path.read_text(errors="replace")[-8000:]
             }
+            native_failure = _native_runtime_failure_diagnostic(
+                service_log_path,
+                start_offset=service_log_start,
+            )
+            if native_failure is not None:
+                detail = dict(detail)
+                detail["error"] = native_failure["message"]
+                detail["device_failure"] = native_failure
             raise RuntimeError(
                 "persistent TT runtime job failed:\n"
                 + json.dumps(detail, indent=2)
@@ -1543,27 +2097,29 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
             worker_arguments.append("--torch-fx-fusion")
         if self.eval_dataset is None:
             worker_arguments.append("--no-eval")
-        if self.args.optimizer_layout in {"auto", "tile_packed"}:
-            selected = getattr(self, "_selected_execution_candidate", None)
-            optimizer_pack_bytes = (
-                selected.optimizer_pack_bytes
-                if selected is not None else self.args.optimizer_pack_bytes
-            )
-            optimizer_packing_strategy = (
-                selected.optimizer_packing_strategy
-                if selected is not None
-                else self.args.optimizer_packing_strategy
-            )
+        selected = getattr(self, "_selected_execution_candidate", None)
+        if (
+            self.args.optimizer_layout in {"auto", "tile_packed"}
+            and selected is None
+        ):
             worker_arguments.append("--optimizer-tile-packed")
             worker_arguments.extend(
                 [
                     "--optimizer-pack-bytes",
-                    str(optimizer_pack_bytes),
+                    str(self.args.optimizer_pack_bytes),
                     "--optimizer-packing-strategy",
-                    optimizer_packing_strategy,
+                    self.args.optimizer_packing_strategy,
                 ]
             )
-        worker_arguments.extend(self._graph_worker_arguments(report))
+        if selected is not None:
+            # The measured winner is an executable runtime contract, not only
+            # a graph-partition hint.  Consume every qualified attention,
+            # PEFT, MoE, optimizer, and partition choice exactly as it was
+            # measured; otherwise public train() silently falls back to a
+            # different and potentially much slower schedule.
+            worker_arguments.extend(self._selected_worker_arguments())
+        else:
+            worker_arguments.extend(self._graph_worker_arguments(report))
         try:
             telemetry_path = (
                 pipeline.generated_dir / "telemetry_public_train.json"
@@ -1579,6 +2135,19 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                     telemetry_path=telemetry_path,
                 )
             else:
+                # A long-lived service retains PJRT/TT-Metal device mappings
+                # even while it owns no training state and is otherwise idle.
+                # Starting a fresh-process run beside it can fail before model
+                # loading with ``tt_tlb_alloc``/TLB-window exhaustion.  The
+                # isolated contract requires exclusive process ownership, so
+                # release an idle package service before spawning the worker;
+                # _stop_persistent_service deliberately refuses to terminate
+                # an unrelated active training job.
+                runtime_root = self._persistent_root()
+                self._stop_persistent_service(
+                    self._persistent_socket_path(),
+                    info_path=runtime_root / "runtime_info.json",
+                )
                 memory_log_host = execution_output / "tt_metal_logs"
                 memory_log_container = f"{output}/tt_metal_logs"
                 self._run_local(
@@ -1628,13 +2197,31 @@ class DirectBlackholeBackend(BlackholeXlaBackend):
                         json.dumps(metrics, indent=2) + "\n",
                         encoding="utf-8",
                     )
+            if execution_profile is not None:
+                selected_plan = execution_profile.get("selected") or {}
+                metrics["automatic_execution_plan"] = selected_plan
+                metrics["execution_profile"] = {
+                    "profile_key": execution_profile.get("profile_key"),
+                    "selection_status": execution_profile.get(
+                        "selection_status"
+                    ),
+                    "cache_status": execution_profile.get("cache_status"),
+                    "selected_candidate_id": selected_plan.get(
+                        "candidate_id"
+                    ),
+                }
+                (execution_output / "training_metrics.json").write_text(
+                    json.dumps(metrics, indent=2) + "\n",
+                    encoding="utf-8",
+                )
             self._export(resolved, output)
             metrics_path = execution_output / "training_metrics.json"
             adapter = execution_output / "peft_adapter"
             if not pipeline.valid_peft_adapter(adapter):
                 raise RuntimeError(f"Invalid PEFT adapter: {adapter}")
-            memory_report = metrics.get("memory_accounting", {}).get(
-                "weight_memory_mode", {}
+            memory_report = (
+                metrics.get("memory_accounting", {}).get("weight_memory_mode")
+                or {}
             )
             adapter_config = self.model.adapter_config
             assert adapter_config is not None

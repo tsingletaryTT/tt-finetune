@@ -47,6 +47,7 @@ class OptimizerStep:
     learning_rate: float | None
     useful_tokens: int = 0
     padded_tokens: int = 0
+    sequence_lengths: tuple[int, ...] = ()
     data_wait_seconds: float = 0.0
 
 
@@ -60,6 +61,8 @@ class TrainingOps(Protocol):
     def backward(self, loss: Any, divisor: int) -> None: ...
 
     def sync(self) -> None: ...
+
+    def audit_gradient_state(self) -> None: ...
 
     def clip_grad_norm(self, maximum: float) -> None: ...
 
@@ -122,6 +125,7 @@ class TrainingLoop:
             window_started = 0.0
             useful_tokens = 0
             padded_tokens = 0
+            sequence_lengths: list[int] = []
             data_wait_seconds = 0.0
             self.ops.zero_grad()
 
@@ -156,6 +160,7 @@ class TrainingLoop:
                     window_started = wait_started
                     useful_tokens = 0
                     padded_tokens = 0
+                    sequence_lengths = []
                     data_wait_seconds = 0.0
                     next_optimizer_step = state.optimizer_step + 1
                     read_window_loss = (
@@ -172,6 +177,9 @@ class TrainingLoop:
                 batch_useful, batch_padded = self._batch_token_counts(batch)
                 useful_tokens += batch_useful
                 padded_tokens += batch_padded
+                sequence_length = self._batch_sequence_length(batch)
+                if sequence_length is not None:
+                    sequence_lengths.append(sequence_length)
                 data_wait_seconds += batch_wait
                 loss = self.ops.forward_loss(batch)
                 self.ops.backward(loss, accumulation_target)
@@ -189,6 +197,12 @@ class TrainingLoop:
 
                 if accumulation_step < accumulation_target:
                     continue
+                # Qualification reads the unmodified accumulated gradients at
+                # the exact boundary before clipping.  Auditing from inside
+                # optimizer_step observes an XLA in-place clipping alias on
+                # some graphs rather than the values consumed by the packed
+                # optimizer, which can incorrectly report an all-zero set.
+                self.ops.audit_gradient_state()
                 if self.config.max_grad_norm is not None:
                     self.ops.clip_grad_norm(self.config.max_grad_norm)
                 self.ops.optimizer_step()
@@ -217,6 +231,7 @@ class TrainingLoop:
                     learning_rate=self.ops.learning_rate(),
                     useful_tokens=useful_tokens,
                     padded_tokens=padded_tokens,
+                    sequence_lengths=tuple(sequence_lengths),
                     data_wait_seconds=data_wait_seconds,
                 )
                 records.append(record)
@@ -327,3 +342,24 @@ class TrainingLoop:
         padded = len(values)
         useful = padded if mask is None else sum(scalar(value) for value in values)
         return useful, padded
+
+    @staticmethod
+    def _batch_sequence_length(batch: Any) -> int | None:
+        """Return the compiled sequence dimension without framework imports."""
+
+        if not isinstance(batch, Mapping):
+            return None
+        source = batch.get("input_ids")
+        if source is None:
+            source = batch.get("attention_mask")
+        if source is None:
+            return None
+        shape = getattr(source, "shape", None)
+        if shape is not None and len(shape):
+            return int(shape[-1])
+        if isinstance(source, (list, tuple)) and source:
+            first = source[0]
+            if isinstance(first, (list, tuple)):
+                return len(first)
+            return len(source)
+        return None

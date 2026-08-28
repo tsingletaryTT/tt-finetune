@@ -13,7 +13,10 @@ import gc
 import json
 import os
 from pathlib import Path
+import signal
+import socket
 import socketserver
+import threading
 import time
 import traceback
 from typing import Any
@@ -58,9 +61,15 @@ def _load_job_config(request: dict[str, Any]):
 
 
 class RuntimeState:
-    def __init__(self, fingerprint: str, info_path: Path):
+    def __init__(
+        self,
+        fingerprint: str,
+        info_path: Path,
+        socket_path: Path,
+    ):
         self.fingerprint = fingerprint
         self.info_path = info_path
+        self.socket_path = socket_path
         self.started_at = time.time()
         self.jobs_started = 0
         self.jobs_completed = 0
@@ -71,8 +80,9 @@ class RuntimeState:
     def _write_info(self) -> None:
         self.info_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "pid": os.getpid(),
+            "socket_path": str(self.socket_path),
             "fingerprint": self.fingerprint,
             "started_at_unix": self.started_at,
             "jobs_started": self.jobs_started,
@@ -145,8 +155,45 @@ class RuntimeState:
             self._write_info()
 
 
+def _client_connection_is_open(connection: socket.socket) -> bool:
+    """Return whether the request owner still holds its service connection."""
+
+    try:
+        pending = connection.recv(
+            1, socket.MSG_PEEK | socket.MSG_DONTWAIT
+        )
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    return bool(pending)
+
+
+def _watch_training_client(
+    connection: socket.socket,
+    stopped: threading.Event,
+    *,
+    interval_seconds: float = 0.5,
+) -> None:
+    """Terminate an orphaned service instead of continuing an ownerless job.
+
+    The service deliberately owns compiler state but not training state.  If
+    the client supervising a training request disappears, continuing to use
+    the card cannot produce a response and can block every subsequent user
+    request.  Process termination is the only generally safe cancellation
+    boundary available while PJRT execution is synchronous.
+    """
+
+    while not stopped.wait(interval_seconds):
+        if not _client_connection_is_open(connection):
+            os.kill(os.getpid(), signal.SIGTERM)
+            return
+
+
 class RequestHandler(socketserver.StreamRequestHandler):
     def handle(self) -> None:
+        lease_stopped: threading.Event | None = None
+        lease_watcher: threading.Thread | None = None
         try:
             request = json.loads(self.rfile.readline())
             action = request.get("action", "train")
@@ -154,7 +201,19 @@ class RequestHandler(socketserver.StreamRequestHandler):
             if action == "status":
                 response = {"status": "ready", **state.status()}
             elif action == "train":
-                response = state.run_job(request)
+                lease_stopped = threading.Event()
+                lease_watcher = threading.Thread(
+                    target=_watch_training_client,
+                    args=(self.connection, lease_stopped),
+                    name="tt-finetune-client-lease",
+                    daemon=True,
+                )
+                lease_watcher.start()
+                try:
+                    response = state.run_job(request)
+                finally:
+                    lease_stopped.set()
+                    lease_watcher.join(timeout=2.0)
             else:
                 raise ValueError(f"unsupported service action: {action!r}")
         except Exception as error:
@@ -175,10 +234,14 @@ def main() -> None:
     arguments.socket.parent.mkdir(parents=True, exist_ok=True)
     arguments.info.parent.mkdir(parents=True, exist_ok=True)
     arguments.socket.unlink(missing_ok=True)
-    state = RuntimeState(arguments.fingerprint, arguments.info)
+    state = RuntimeState(
+        arguments.fingerprint,
+        arguments.info,
+        arguments.socket,
+    )
     with UnixRuntimeServer(str(arguments.socket), RequestHandler) as server:
         server.runtime_state = state  # type: ignore[attr-defined]
-        os.chmod(arguments.socket, 0o666)
+        os.chmod(arguments.socket, 0o600)
         server.serve_forever(poll_interval=0.25)
 
 

@@ -15,6 +15,37 @@ import subprocess
 import time
 
 
+DEFAULT_MAX_BOARD_POWER_W = 285.0
+DEFAULT_POWER_LIMIT_SAMPLES = 3
+
+
+def power_limit_sample(
+    power_w: float,
+    *,
+    limit_w: float,
+    required_samples: int,
+    prior_streak: int,
+) -> tuple[int, str | None]:
+    """Require a sustained board-power excursion before terminating.
+
+    P150a firmware exposes a 300 W board limit and can report legitimate
+    sub-second excursions above its nominal TDP.  Treating one 1 Hz sample
+    above 160 W as fatal terminated healthy medium-model jobs.  Temperature
+    limits remain immediate; only power uses this bounded debounce.
+    """
+
+    if power_w < limit_w:
+        return 0, None
+    streak = prior_streak + 1
+    if streak < required_samples:
+        return streak, None
+    return (
+        streak,
+        f"board power {power_w:.1f}W >= {limit_w:.1f}W for "
+        f"{streak} consecutive samples",
+    )
+
+
 def _blackhole_hwmon() -> Path:
     for path in sorted(Path("/sys/class/hwmon").glob("hwmon*")):
         try:
@@ -92,6 +123,15 @@ def summarize(samples: list[dict]) -> dict:
                 "max": max(values),
             }
     return summary
+
+
+def _write_json_atomic(path: Path, payload: dict) -> None:
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    temporary.write_text(
+        json.dumps(payload, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _set_parent_death_signal() -> None:
@@ -185,7 +225,17 @@ def main() -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--interval", type=float, default=2.0)
     parser.add_argument("--max-temperature-c", type=float, default=88.0)
-    parser.add_argument("--max-power-w", type=float, default=160.0)
+    parser.add_argument(
+        "--max-power-w",
+        type=float,
+        default=DEFAULT_MAX_BOARD_POWER_W,
+    )
+    parser.add_argument(
+        "--power-limit-samples",
+        type=int,
+        default=DEFAULT_POWER_LIMIT_SAMPLES,
+        help="Consecutive over-limit samples required before termination.",
+    )
     parser.add_argument("--max-host-temperature-c", type=float, default=90.0)
     parser.add_argument(
         "--max-runtime-seconds",
@@ -215,12 +265,29 @@ def main() -> int:
         parser.error("--host-threads must be positive")
     if arguments.max_runtime_seconds <= 0:
         parser.error("--max-runtime-seconds must be positive")
+    if arguments.max_power_w <= 0:
+        parser.error("--max-power-w must be positive")
+    if arguments.power_limit_samples <= 0:
+        parser.error("--power-limit-samples must be positive")
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     hwmon = _blackhole_hwmon()
     executed_command = list(command)
     started = time.perf_counter()
     started_at = datetime.now().astimezone().isoformat()
+    _write_json_atomic(
+        arguments.output,
+        {
+            "format_version": 1,
+            "status": "running",
+            "command": command,
+            "started_at": started_at,
+            "message": (
+                "telemetry collection is active; final samples are written "
+                "when the owned command exits"
+            ),
+        },
+    )
     parent_pid = os.getppid()
     _set_parent_death_signal()
     if os.getppid() != parent_pid:
@@ -236,6 +303,9 @@ def main() -> int:
     samples: list[dict] = []
     sampling_errors: list[str] = []
     safety_events: list[str] = []
+    power_limit_streak = 0
+    power_transient_exceedances = 0
+    maximum_power_limit_streak = 0
     forwarded_signal: int | None = None
 
     def forward_signal(signum: int, _frame: object) -> None:
@@ -264,11 +334,6 @@ def main() -> int:
                         f"ASIC temperature {sample['asic_temperature_c']:.1f}C "
                         f">= {arguments.max_temperature_c:.1f}C"
                     )
-                elif sample["power_w"] >= arguments.max_power_w:
-                    violation = (
-                        f"board power {sample['power_w']:.1f}W "
-                        f">= {arguments.max_power_w:.1f}W"
-                    )
                 elif (
                     sample["host_temperature_c"]
                     >= arguments.max_host_temperature_c
@@ -296,6 +361,23 @@ def main() -> int:
                         f"{time.perf_counter() - started:.1f}s >= "
                         f"{arguments.max_runtime_seconds:.1f}s"
                     )
+                if violation is None:
+                    power_limit_streak, power_violation = power_limit_sample(
+                        sample["power_w"],
+                        limit_w=arguments.max_power_w,
+                        required_samples=arguments.power_limit_samples,
+                        prior_streak=power_limit_streak,
+                    )
+                    maximum_power_limit_streak = max(
+                        maximum_power_limit_streak,
+                        power_limit_streak,
+                    )
+                    if (
+                        sample["power_w"] >= arguments.max_power_w
+                        and power_violation is None
+                    ):
+                        power_transient_exceedances += 1
+                    violation = power_violation
                 if violation is not None:
                     safety_events.append(violation)
                     _stop_process_group(child, signal.SIGTERM)
@@ -317,6 +399,7 @@ def main() -> int:
     duration = time.perf_counter() - started
     payload = {
         "format_version": 1,
+        "status": "completed" if exit_code == 0 else "failed",
         "command": command,
         "executed_command": executed_command,
         "started_at": started_at,
@@ -329,6 +412,7 @@ def main() -> int:
         "limits": {
             "max_temperature_c": arguments.max_temperature_c,
             "max_power_w": arguments.max_power_w,
+            "power_limit_samples": arguments.power_limit_samples,
             "max_host_temperature_c": arguments.max_host_temperature_c,
             "max_runtime_seconds": arguments.max_runtime_seconds,
             "min_host_available_memory_gib": (
@@ -337,12 +421,15 @@ def main() -> int:
             "host_threads": arguments.host_threads,
             "sleep_inhibited": inhibitor is not None,
         },
+        "power_limit_observation": {
+            "transient_exceedance_samples": power_transient_exceedances,
+            "maximum_consecutive_exceedance_samples": (
+                maximum_power_limit_streak
+            ),
+        },
         "summary": summarize(samples),
     }
-    arguments.output.write_text(
-        json.dumps(payload, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    _write_json_atomic(arguments.output, payload)
     print(f"Telemetry: {arguments.output}")
     return exit_code
 

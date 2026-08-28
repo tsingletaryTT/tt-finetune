@@ -67,7 +67,7 @@ Install the supplied platform wheel. Its dependency metadata installs the
 compatible host-side data tools:
 
 ```bash
-python -m pip install ./dist/tt_finetune-0.2.0-cp312-cp312-linux_x86_64.whl
+python -m pip install ./dist/tt_finetune-0.2.1rc1-cp312-cp312-linux_x86_64.whl
 tt-finetune doctor
 ```
 

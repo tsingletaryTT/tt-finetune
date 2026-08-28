@@ -17,6 +17,7 @@ FORCE_INLINE uint64_t projection_l1(uint32_t node, uint32_t address) {
 }
 
 void kernel_main() {
+    constexpr bool prefix_only = @PROJECTION_ROPE_PREFIX_ONLY@;
     constexpr uint32_t cb_q_saved = 9, cb_k_saved = 13;
     constexpr uint32_t cb_probability_saved = @ATTENTION_CHECKPOINT_CB@;
     constexpr uint32_t cb_head = 31;
@@ -47,7 +48,7 @@ void kernel_main() {
     // CB23 until this writer has copied its exact FP32 bytes to the arena.
     CircularBuffer raw_checkpoint_ack(16);
 #endif
-    CircularBuffer head(cb_head);
+    CircularBuffer head(cb_head), value(29);
     q.wait_front(dim_tiles);
     for (uint32_t dim = 0; dim < dim_tiles; ++dim)
         noc1.async_write(CoreLocalMem<uint32_t>(q.get_read_ptr() + dim * tile_bytes),
@@ -62,6 +63,7 @@ void kernel_main() {
         noc1.async_write_barrier();
     }
     k.pop_front(seq_tiles * dim_tiles);
+    if constexpr (!prefix_only) {
 #if @PUBLISH_RAW_SCORE_CHECKPOINT@
     // Publish the raw FP32 score before waiting for the downstream attention
     // head: producing that head consumes CB23.  The writer deliberately does
@@ -96,6 +98,13 @@ void kernel_main() {
     }
     noc1.async_write_barrier(); probability.pop_front(seq_tiles);
 #endif
+    } else {
+        // V is already checkpointed by the projection writer. Retire the
+        // replicated attention-island stream so the prefix program returns
+        // every CB epoch empty without running QK/softmax/P@V.
+        value.wait_front(seq_tiles * dim_tiles);
+        value.pop_front(seq_tiles * dim_tiles);
+    }
 
     noc_semaphore_inc(
         projection_l1(0, get_semaphore(invocation_writer_count_sem)), 1);

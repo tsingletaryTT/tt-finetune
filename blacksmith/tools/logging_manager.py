@@ -43,9 +43,18 @@ class TrainingLogger:
     def _setup_std_logger(self):
         self.std_logger = logging.getLogger(self.config.wandb_run_name)
         self.std_logger.setLevel(getattr(logging, self.config.log_level.upper()))
+        # A persistent runtime constructs a fresh logger while stdout is
+        # redirected to each job's private log.  Letting records propagate to
+        # a process-global root handler can target the previous job's already
+        # closed file and produces a noisy "I/O operation on closed file"
+        # traceback on the next compatible job.
+        self.std_logger.propagate = False
 
-        # Remove existing handlers to avoid duplicates
-        self.std_logger.handlers.clear()
+        # Remove and close existing handlers to avoid duplicates and release
+        # job-scoped redirected streams before installing the new handler.
+        for handler in tuple(self.std_logger.handlers):
+            self.std_logger.removeHandler(handler)
+            handler.close()
 
         # Create formatter
         formatter = logging.Formatter(fmt="%(asctime)s | %(levelname)s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S")

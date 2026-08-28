@@ -1,4 +1,4 @@
-"""Apply a architecture architecture plan to an instantiated PEFT model."""
+"""Apply an architecture plan to an instantiated PEFT model."""
 
 from __future__ import annotations
 
@@ -142,6 +142,11 @@ def plan_and_install_architecture(
     if descriptor.moe is not None:
         moe_selection = plan.selection("moe")
         selected_moe_backend = (
+            "dynamic"
+            if requested_moe_backend == "auto"
+            and plan.moe_execution_schedule
+            == "dynamic_native_expert_bucketed"
+            else
             "sparse"
             if requested_moe_backend == "auto"
             and moe_selection.implementation == "device_sparse_selected_experts"
@@ -173,15 +178,14 @@ def plan_and_install_architecture(
             backend=selected_moe_backend,
         )
 
-    # The public HF worker executes the architecture-general safe graph. The
-    # frozen full-stack resident owner has a separate packed-state ABI; until
-    # that ABI is invoked by the worker, an exact structural match is reported
-    # and deliberately falls back rather than pretending the resident owner ran.
+    # This is the emitted executor plan, not a retrospective guess about what
+    # the worker ran.  The public worker must either construct this resident
+    # ABI or fail the job; product-semantic exclusions are applied explicitly
+    # before model transfer and replace this field with the safe backend plus
+    # a concrete reason.  Silent post-plan fallback is forbidden.
     if plan.selected_stack_backend == "resident_exact":
-        executor_backend = "safe_torch_xla_autograd"
-        executor_fallback_reason = (
-            "frozen resident stack requires its packed resident runtime executor ABI"
-        )
+        executor_backend = "resident_exact"
+        executor_fallback_reason = None
     else:
         executor_backend = plan.selected_stack_backend
         executor_fallback_reason = None

@@ -8,8 +8,15 @@ from pathlib import Path
 import socket
 
 
-def request(socket_path: str | Path, payload: dict) -> dict:
+def request(
+    socket_path: str | Path,
+    payload: dict,
+    *,
+    timeout_seconds: float | None = None,
+) -> dict:
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        if timeout_seconds is not None:
+            client.settimeout(timeout_seconds)
         client.connect(str(socket_path))
         client.sendall((json.dumps(payload) + "\n").encode("utf-8"))
         response = bytearray()

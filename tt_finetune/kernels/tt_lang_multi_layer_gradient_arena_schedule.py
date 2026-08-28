@@ -241,6 +241,9 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
     attention_scale: float,
     rmsnorm_epsilon: float,
     has_bias: bool = False,
+    active_lora_roles: tuple[str, ...] = (
+        "q", "k", "v", "o", "gate", "up", "down",
+    ),
     debug_forward_checkpoint_only: bool = False,
     debug_forward_checkpoint_layer: int = -1,
     debug_forward_checkpoint_separate_parameters: bool = False,
@@ -288,6 +291,10 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
         raise ValueError("forward checkpoint diagnostics require a forward phase")
     if physical_rank != 32:
         raise ValueError("multi-layer packed schedule requires physical rank 32")
+    canonical_roles = {"q", "k", "v", "o", "gate", "up", "down"}
+    active_lora_roles = tuple(dict.fromkeys(active_lora_roles))
+    if not active_lora_roles or not set(active_lora_roles) <= canonical_roles:
+        raise ValueError("active LoRA roles must be a non-empty canonical subset")
     if canonical_exact_attention and not compact_forward:
         raise ValueError(
             "canonical exact attention requires the compact forward owner"
@@ -415,6 +422,10 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
         }
         if canonical_exact_attention else {}
     )
+    topology_forward_kwargs = (
+        {"active_lora_roles": active_lora_roles}
+        if compact_forward else {}
+    )
     forward0 = forward_builder(
         sequence_length=sequence_length,
         hidden_features=hidden_features,
@@ -432,6 +443,7 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
         hidden_page_base=0,
         publish_layer_output_at_page_zero=canonical_exact_attention,
         o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
+        **topology_forward_kwargs,
         **exact_forward_kwargs,
     )
     forward_later = forward_builder(
@@ -451,6 +463,7 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
         hidden_page_base=forward0.layer_output_page_offset,
         publish_layer_output_at_page_zero=canonical_exact_attention,
         o_lora_k_tiles_per_phase=o_lora_k_tiles_per_phase,
+        **topology_forward_kwargs,
         **exact_forward_kwargs,
     )
     forward_internal_specs = (
@@ -610,6 +623,7 @@ def build_tt_lang_multi_layer_gradient_arena_schedule(
         f"{sequence_length}x{hidden_features}.i{intermediate_features}."
         f"kv{kv_features}.r{physical_rank}.lr{logical_rank}."
         f"bias{int(has_bias)}."
+        f"targets{'-'.join(active_lora_roles)}."
         f"forwarddiag{int(debug_forward_checkpoint_only)}."
         f"forwardlayer{checkpoint_diagnostic_layer}."
         f"forwardsepparams{int(debug_forward_checkpoint_separate_parameters)}."

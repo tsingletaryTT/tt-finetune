@@ -52,6 +52,12 @@ class ResidentModelShape:
     attention_scale: float
     rmsnorm_epsilon: float
     has_bias: bool
+    # Canonical semantic projections that own real trainable LoRA state.
+    # The packed ABI keeps fixed physical slots for all seven roles, but the
+    # execution compiler must be able to omit arithmetic for zero/inactive
+    # slots.  Keeping the topology beside the geometry makes that decision
+    # semantic and model-name independent.
+    active_lora_roles: tuple[str, ...] = _PROJECTIONS
 
 
 @dataclass(frozen=True)
@@ -60,7 +66,13 @@ class PackedStateRegion:
 
     layer: int
     short_name: str
-    parameter_name: str
+    # ``None`` denotes an inactive projection represented by an all-zero
+    # physical slot.  The resident program has a fixed seven-projection ABI,
+    # while ordinary PEFT configurations may target only a semantic subset
+    # (for example Q/V).  Zero A and B matrices make that slot mathematically
+    # absent; it must not appear in checkpoints, exports, audits, or logical
+    # optimizer state.
+    parameter_name: str | None
     logical_shape: tuple[int, int]
     physical_shape: tuple[int, int]
     page_offset: int
@@ -80,7 +92,11 @@ class PackedTransformerStack:
     regions: tuple[PackedStateRegion, ...]
 
     def region_by_parameter(self) -> Mapping[str, PackedStateRegion]:
-        return {region.parameter_name: region for region in self.regions}
+        return {
+            region.parameter_name: region
+            for region in self.regions
+            if region.parameter_name is not None
+        }
 
     def logical_state(self, packed: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         """Return logical, unpadded matrix views keyed by model parameter name."""
@@ -89,6 +105,8 @@ class PackedTransformerStack:
         pages = source.reshape(-1, 32, 32)
         result: dict[str, torch.Tensor] = {}
         for region in self.regions:
+            if region.parameter_name is None:
+                continue
             rows, columns = region.physical_shape
             row_tiles, column_tiles = rows // 32, columns // 32
             matrix = pages[
@@ -113,6 +131,8 @@ class PackedTransformerStack:
         pages = arena.reshape(-1, 32, 32)
         result: dict[str, torch.Tensor] = {}
         for region in self.regions:
+            if region.parameter_name is None:
+                continue
             gradient_slice = self.gradient_plan.slice(
                 region.layer, region.short_name
             )
@@ -134,7 +154,11 @@ class PackedTransformerStack:
     ) -> torch.Tensor:
         """Pack logical gradients on their current device into the arena ABI."""
 
-        expected = {region.parameter_name for region in self.regions}
+        expected = {
+            region.parameter_name
+            for region in self.regions
+            if region.parameter_name is not None
+        }
         if values.keys() != expected:
             missing = sorted(expected - values.keys())
             extra = sorted(values.keys() - expected)
@@ -147,12 +171,15 @@ class PackedTransformerStack:
         ]
         page_cursor = self.gradient_plan.scratch_pages
         for region in self.regions:
-            logical = values[region.parameter_name]
-            if tuple(logical.shape) != region.logical_shape:
-                raise ValueError(
-                    f"{region.parameter_name} gradient shape changed: "
-                    f"{tuple(logical.shape)} != {region.logical_shape}"
-                )
+            if region.parameter_name is None:
+                logical = first.new_zeros(region.logical_shape)
+            else:
+                logical = values[region.parameter_name]
+                if tuple(logical.shape) != region.logical_shape:
+                    raise ValueError(
+                        f"{region.parameter_name} gradient shape changed: "
+                        f"{tuple(logical.shape)} != {region.logical_shape}"
+                    )
             physical_rows, physical_columns = region.physical_shape
             padded = F.pad(
                 logical,
@@ -194,9 +221,10 @@ class _Projection:
     b: torch.Tensor
     logical_a_shape: tuple[int, int]
     logical_b_shape: tuple[int, int]
-    a_name: str
-    b_name: str
+    a_name: str | None
+    b_name: str | None
     scale: float
+    active: bool
 
 
 def _active_adapter(projection: nn.Module) -> str:
@@ -210,25 +238,73 @@ def _active_adapter(projection: nn.Module) -> str:
 
 
 def _projection(
-    projection: nn.Module, *, path: str, dtype: torch.dtype,
+    projection: nn.Module,
+    *,
+    path: str,
+    dtype: torch.dtype,
+    logical_rank: int,
+    lora_scale: float,
 ) -> _Projection:
-    adapter = _active_adapter(projection)
+    """Return one fixed-ABI projection, zero-filling an untargeted linear.
+
+    PEFT replaces only selected modules.  The resident Transformer program has
+    one physical A/B slot for every canonical projection, so an ordinary
+    frozen linear is represented by exact all-zero A and B matrices.  Because
+    both factors start at zero, its LoRA output, dX, dA and dB remain zero and
+    the physical slot is a semantic no-op.
+    """
+
+    active = hasattr(projection, "lora_A")
+    base_layer = getattr(projection, "base_layer", projection)
     try:
-        weight = projection.base_layer.weight.detach()
-        a_parameter = projection.lora_A[adapter].weight
-        b_parameter = projection.lora_B[adapter].weight
-        scale = float(projection.scaling[adapter])
-        dropout = projection.lora_dropout[adapter]
-    except (AttributeError, KeyError, TypeError) as exc:
-        raise ValueError(f"{path} is not an ordinary PEFT LoRA linear") from exc
-    if float(getattr(dropout, "p", 0.0)) != 0.0:
-        raise ValueError(f"{path} has nonzero LoRA dropout")
-    if bool(getattr(projection, "use_dora", {}).get(adapter, False)):
-        raise ValueError(f"{path} uses unsupported DoRA")
+        weight = base_layer.weight.detach()
+        in_features = int(projection.in_features)
+        out_features = int(projection.out_features)
+    except (AttributeError, TypeError) as exc:
+        raise ValueError(f"{path} is not a linear projection") from exc
+
+    if active:
+        adapter = _active_adapter(projection)
+        try:
+            a_parameter = projection.lora_A[adapter].weight
+            b_parameter = projection.lora_B[adapter].weight
+            scale = float(projection.scaling[adapter])
+            dropout = projection.lora_dropout[adapter]
+        except (AttributeError, KeyError, TypeError) as exc:
+            raise ValueError(f"{path} is not an ordinary PEFT LoRA linear") from exc
+        if float(getattr(dropout, "p", 0.0)) != 0.0:
+            raise ValueError(f"{path} has nonzero LoRA dropout")
+        if bool(getattr(projection, "use_dora", {}).get(adapter, False)):
+            raise ValueError(f"{path} uses unsupported DoRA")
+        if tuple(a_parameter.shape) != (logical_rank, in_features):
+            raise ValueError(
+                f"{path} rank/input geometry changed: {tuple(a_parameter.shape)}"
+            )
+        if tuple(b_parameter.shape) != (out_features, logical_rank):
+            raise ValueError(
+                f"{path} output/rank geometry changed: {tuple(b_parameter.shape)}"
+            )
+        if scale != lora_scale:
+            raise ValueError(
+                f"{path} has LoRA scale {scale}, expected {lora_scale}"
+            )
+        a_name: str | None = f"{path}.lora_A.{adapter}.weight"
+        b_name: str | None = f"{path}.lora_B.{adapter}.weight"
+    else:
+        a_parameter = torch.zeros(
+            (logical_rank, in_features), dtype=dtype, device=weight.device
+        )
+        b_parameter = torch.zeros(
+            (out_features, logical_rank), dtype=dtype, device=weight.device
+        )
+        scale = lora_scale
+        a_name = None
+        b_name = None
+
     if weight.dtype != dtype or a_parameter.dtype != dtype or b_parameter.dtype != dtype:
         raise ValueError(f"{path} must use {dtype} weights and adapters")
     a, b = pad_lora_weights(a_parameter.detach(), b_parameter.detach())
-    bias = getattr(projection.base_layer, "bias", None)
+    bias = getattr(base_layer, "bias", None)
     if bias is None:
         bias = torch.zeros(
             projection.out_features, dtype=dtype, device=weight.device
@@ -243,9 +319,10 @@ def _projection(
         b=b,
         logical_a_shape=tuple(a_parameter.shape),
         logical_b_shape=tuple(b_parameter.shape),
-        a_name=f"{path}.lora_A.{adapter}.weight",
-        b_name=f"{path}.lora_B.{adapter}.weight",
+        a_name=a_name,
+        b_name=b_name,
         scale=scale,
+        active=active,
     )
 
 
@@ -304,6 +381,7 @@ def pack_transformer_stack(
     attention_mask: torch.Tensor | None,
     batch_size: int = 1,
     sequence_length: int = 128,
+    logical_rank: int | None = None,
     physical_rank: int | None = None,
     include_frozen_state: bool = True,
 ) -> PackedTransformerStack:
@@ -356,14 +434,13 @@ def pack_transformer_stack(
         # and pack LoRA parameters for clipping/AdamW.
         mask_matrix = None
 
-    blocks: list[tuple[torch.Tensor, ...]] = []
-    projection_maps: list[dict[str, _Projection]] = []
-    epsilons: set[float] = set()
-    scales: set[float] = set()
-    bias_contracts: set[bool] = set()
-    for layer_index, (layer_path, layer) in enumerate(layers):
+    projection_modules_by_layer: list[dict[str, nn.Module]] = []
+    active_ranks: set[int] = set()
+    active_scales: set[float] = set()
+    active_role_signatures: set[tuple[str, ...]] = set()
+    for layer_path, layer in layers:
         attention, mlp = layer.self_attn, layer.mlp
-        projection_modules = {
+        modules = {
             "q": attention.q_proj,
             "k": attention.k_proj,
             "v": attention.v_proj,
@@ -372,10 +449,58 @@ def pack_transformer_stack(
             "up": mlp.up_proj,
             "down": mlp.down_proj,
         }
+        active_roles: list[str] = []
+        for role, module in modules.items():
+            if not hasattr(module, "lora_A"):
+                continue
+            adapter = _active_adapter(module)
+            try:
+                a_parameter = module.lora_A[adapter].weight
+                scale = float(module.scaling[adapter])
+            except (AttributeError, KeyError, TypeError) as exc:
+                raise ValueError(
+                    f"{layer_path}.{role}_proj is not an ordinary PEFT LoRA linear"
+                ) from exc
+            active_roles.append(role)
+            active_ranks.add(int(a_parameter.shape[0]))
+            active_scales.add(scale)
+        if not active_roles:
+            raise ValueError(f"{layer_path} has no active LoRA projection")
+        active_role_signatures.add(tuple(active_roles))
+        projection_modules_by_layer.append(modules)
+    if len(active_role_signatures) != 1:
+        raise ValueError(
+            "resident runtime requires the same semantic LoRA targets in every layer"
+        )
+    if len(active_ranks) != 1 or len(active_scales) != 1:
+        raise ValueError(
+            "resident runtime requires one uniform logical rank and LoRA scale"
+        )
+    discovered_rank = next(iter(active_ranks))
+    if logical_rank is None:
+        logical_rank = discovered_rank
+    elif logical_rank != discovered_rank:
+        raise ValueError(
+            f"requested logical rank {logical_rank} differs from PEFT rank "
+            f"{discovered_rank}"
+        )
+    lora_scale = next(iter(active_scales))
+
+    blocks: list[tuple[torch.Tensor, ...]] = []
+    projection_maps: list[dict[str, _Projection]] = []
+    epsilons: set[float] = set()
+    scales: set[float] = set()
+    bias_contracts: set[bool] = set()
+    for layer_index, ((layer_path, layer), projection_modules) in enumerate(
+        zip(layers, projection_modules_by_layer, strict=True)
+    ):
+        attention, mlp = layer.self_attn, layer.mlp
         projections = {
             name: _projection(
                 module, path=f"{layer_path}.{'self_attn' if name in ('q', 'k', 'v', 'o') else 'mlp'}.{name}_proj",
                 dtype=dtype,
+                logical_rank=logical_rank,
+                lora_scale=lora_scale,
             )
             for name, module in projection_modules.items()
         }
@@ -386,12 +511,7 @@ def pack_transformer_stack(
             or int(attention.head_dim) != head_dim
         ):
             raise ValueError(f"{layer_path} changes the homogeneous resident runtime shape")
-        logical_ranks = {
-            projection.logical_a_shape[0] for projection in projections.values()
-        }
-        if len(logical_ranks) != 1:
-            raise ValueError(f"{layer_path} requires one uniform logical rank")
-        layer_rank = next(iter(logical_ranks))
+        layer_rank = logical_rank
         if physical_rank is None:
             physical_rank = padded_rank(layer_rank)
         if layer_rank <= 0 or layer_rank > physical_rank:
@@ -404,12 +524,22 @@ def pack_transformer_stack(
             raise ValueError(f"{layer_path} has nonuniform LoRA scales")
         scales.update(layer_scales)
         qkv_bias = tuple(
-            getattr(projection_modules[name].base_layer, "bias", None) is not None
+            getattr(
+                getattr(projection_modules[name], "base_layer", projection_modules[name]),
+                "bias",
+                None,
+            ) is not None
             for name in ("q", "k", "v")
         )
         if len(set(qkv_bias)) != 1:
             raise ValueError(f"{layer_path} has mixed Q/K/V bias presence")
-        if getattr(projection_modules["o"].base_layer, "bias", None) is not None:
+        if getattr(
+            getattr(
+                projection_modules["o"], "base_layer", projection_modules["o"]
+            ),
+            "bias",
+            None,
+        ) is not None:
             raise ValueError(f"{layer_path} has unsupported O bias")
         bias_contracts.add(qkv_bias[0])
         input_gamma = layer.input_layernorm.weight.detach().reshape(
@@ -462,7 +592,6 @@ def pack_transformer_stack(
 
     if len(scales) != 1 or len(epsilons) != 1 or len(bias_contracts) != 1:
         raise ValueError("resident runtime requires uniform scale, RMS epsilon and bias ABI")
-    logical_rank = projection_maps[0]["q"].logical_a_shape[0]
     assert physical_rank is not None
     shape = ResidentModelShape(
         layers=len(layers),
@@ -480,6 +609,7 @@ def pack_transformer_stack(
         attention_scale=float(first.self_attn.scaling),
         rmsnorm_epsilon=next(iter(epsilons)),
         has_bias=next(iter(bias_contracts)),
+        active_lora_roles=next(iter(active_role_signatures)),
     )
     plan = plan_multi_layer_optimizer_gradient_arena(
         layer_count=len(layers),

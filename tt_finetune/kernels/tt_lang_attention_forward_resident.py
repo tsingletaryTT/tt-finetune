@@ -38,22 +38,27 @@ def attention_forward_resident_arena_shape(
     return (q_pages + k_pages + head_pages + probability_pages) * 32, 32
 
 
-def _resident_compute_source(replacements: dict[str, str]) -> str:
+def _resident_compute_source(
+    replacements: dict[str, str], *, projection_rope_prefix_only: bool = False,
+) -> str:
     cpp = Path(__file__).with_name("cpp")
     prefix = (cpp / "attention_forward_prefix_compute.cpp").read_text()
-    core = (cpp / "attention_forward_core_compute.cpp").read_text()
-    namespace_start = core.index("namespace {")
-    kernel_start = core.index("void kernel_main()")
-    core_helpers = core[namespace_start:kernel_start]
-    tail = core[kernel_start:].replace(
-        "void kernel_main()", "FORCE_INLINE void run_attention_tail()", 1
-    )
-    cb_mapping = {0: 18, **{index: 19 + index for index in range(1, 13)}}
-    tail = re.sub(
-        r"get_compile_time_arg_val\((\d+)\)",
-        lambda match: str(cb_mapping[int(match.group(1))]),
-        tail,
-    )
+    core_helpers = ""
+    tail = ""
+    if not projection_rope_prefix_only:
+        core = (cpp / "attention_forward_core_compute.cpp").read_text()
+        namespace_start = core.index("namespace {")
+        kernel_start = core.index("void kernel_main()")
+        core_helpers = core[namespace_start:kernel_start]
+        tail = core[kernel_start:].replace(
+            "void kernel_main()", "FORCE_INLINE void run_attention_tail()", 1
+        )
+        cb_mapping = {0: 18, **{index: 19 + index for index in range(1, 13)}}
+        tail = re.sub(
+            r"get_compile_time_arg_val\((\d+)\)",
+            lambda match: str(cb_mapping[int(match.group(1))]),
+            tail,
+        )
     extra_includes = """
 #include "api/compute/bcast.h"
 #include "api/compute/reduce.h"
@@ -63,16 +68,30 @@ def _resident_compute_source(replacements: dict[str, str]) -> str:
     prefix_kernel = prefix.index("void kernel_main()")
     source = (
         prefix[:prefix_kernel]
-        + extra_includes
+        + (extra_includes if not projection_rope_prefix_only else "")
         + core_helpers
         + tail
         + "\n"
         + prefix[prefix_kernel:]
     )
-    final_brace = source.rfind("\n}")
-    if final_brace < 0:
-        raise RuntimeError("forward-prefix kernel body changed")
-    source = source[:final_brace] + "\n    run_attention_tail();" + source[final_brace:]
+    if projection_rope_prefix_only:
+        attention_start = source.index("#if @FP32_CANONICAL_ATTENTION@")
+        source = (
+            source[:attention_start]
+            + "    CircularBuffer qrot(cb_q_rotated), krot(cb_k_rotated);\n"
+            + "    qrot.pop_front(dim_tiles);\n"
+            + "    krot.pop_front(vector_tiles);\n"
+            + "}\n"
+        )
+    else:
+        final_brace = source.rfind("\n}")
+        if final_brace < 0:
+            raise RuntimeError("forward-prefix kernel body changed")
+        source = (
+            source[:final_brace]
+            + "\n    run_attention_tail();"
+            + source[final_brace:]
+        )
     source = source.replace("@FP32_CANONICAL_ATTENTION@", "1")
     source = source.replace("@PUBLISH_RAW_SCORE_CHECKPOINT@", "0")
     for marker, value in replacements.items():

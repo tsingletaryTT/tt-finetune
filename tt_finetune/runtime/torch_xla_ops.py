@@ -158,12 +158,19 @@ class TorchXlaTrainingOps:
         self.split_after_loss = split_after_loss
         self.audit_gradients = audit_gradients
         self.gradient_audit: dict[str, Any] | None = None
+        self.evolving_audit: list[dict[str, Any]] = []
+        self._audit_raw_gradients: dict[str, str] | None = None
+        self._audit_clipped_gradients: dict[str, str] | None = None
+        self._audit_pending_loss: Any | None = None
         self.training_dropout = training_dropout
         self.phase_seconds: dict[str, list[float]] = {}
-        self.trainable_parameters = [
-            parameter
-            for parameter in model.parameters()
+        self.trainable_named_parameters = [
+            (name, parameter)
+            for name, parameter in model.named_parameters()
             if parameter.requires_grad
+        ]
+        self.trainable_parameters = [
+            parameter for _name, parameter in self.trainable_named_parameters
         ]
         self.host_master_parameters = host_master_parameters
         if (
@@ -304,7 +311,70 @@ class TorchXlaTrainingOps:
 
             torch_xla.sync(wait=True)
         self._record_phase("cross_entropy", started)
+        if self.audit_gradients:
+            self._audit_pending_loss = loss
         return loss
+
+    def _tensor_hash(self, tensor: Any) -> str:
+        host = tensor.detach().cpu().contiguous()
+        return hashlib.sha256(
+            host.reshape(-1).view(self.torch.uint8).numpy().tobytes()
+        ).hexdigest()
+
+    def _named_hashes(self, values: list[tuple[str, Any]]) -> dict[str, str]:
+        return {
+            name: self._tensor_hash(value)
+            for name, value in sorted(values)
+        }
+
+    def _audit_sync(self) -> None:
+        if self.device_manager.config.use_tt:
+            import torch_xla
+
+            torch_xla.sync(wait=True)
+
+    def _logical_optimizer_moments(
+        self,
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        state_dict = self.optimizer.state_dict()
+        decoder = getattr(
+            self.optimizer, "logical_state_tensors_from_state_dict", None
+        )
+        first: list[tuple[str, Any]] = []
+        second: list[tuple[str, Any]] = []
+        names = [name for name, _parameter in self.trainable_named_parameters]
+        if callable(decoder):
+            for key, value in decoder(state_dict):
+                parts = key.split(".")
+                if len(parts) != 3 or parts[0] != "parameter":
+                    continue
+                index = int(parts[1])
+                if parts[2] == "exp_avg":
+                    first.append((names[index], value))
+                elif parts[2] == "exp_avg_sq":
+                    second.append((names[index], value))
+        else:
+            state = state_dict.get("state", {})
+            parameter_ids = [
+                value
+                for group in state_dict.get("param_groups", [])
+                for value in group.get("params", [])
+            ]
+            if len(parameter_ids) != len(names):
+                raise RuntimeError(
+                    "optimizer-state audit cannot map physical parameters to logical names"
+                )
+            for name, state_id in zip(names, parameter_ids, strict=True):
+                values = state.get(state_id, state.get(str(state_id), {}))
+                if "exp_avg" in values:
+                    first.append((name, values["exp_avg"]))
+                if "exp_avg_sq" in values:
+                    second.append((name, values["exp_avg_sq"]))
+        if len(first) != len(names) or len(second) != len(names):
+            raise RuntimeError(
+                "optimizer-state audit did not recover every logical AdamW moment"
+            )
+        return self._named_hashes(first), self._named_hashes(second)
 
     @staticmethod
     def _batch_signature(batch: Any) -> str:
@@ -333,6 +403,13 @@ class TorchXlaTrainingOps:
             ],
         )
         self._profile_barrier()
+        if self.audit_gradients:
+            self._audit_sync()
+            self._audit_raw_gradients = self._named_hashes([
+                (name, parameter.grad)
+                for name, parameter in self.trainable_named_parameters
+                if parameter.grad is not None
+            ])
         self._record_phase("backward", started)
 
     def sync(self) -> None:
@@ -342,6 +419,91 @@ class TorchXlaTrainingOps:
 
             torch_xla.sync(wait=True)
         self._record_phase("post_backward_sync", started)
+
+    def audit_gradient_state(self) -> None:
+        """Capture the first accumulated pre-clipping gradient authority."""
+
+        if not self.audit_gradients or self.gradient_audit is not None:
+            return
+        named_gradients = [
+            (name, parameter.grad.detach())
+            for name, parameter in self.trainable_named_parameters
+            if parameter.grad is not None
+        ]
+        gradients = [gradient for _name, gradient in named_gradients]
+        # Do not transfer full XLA gradient buffers for this audit.  Large
+        # strided/autograd views can be materialized through a different
+        # layout on the host and have produced false all-zero/Inf reports even
+        # while the packed optimizer moments remain finite.  Reduce the facts
+        # on device and transfer only scalar authorities.
+        finite_scalars = [
+            self.torch.isfinite(gradient).all() for gradient in gradients
+        ]
+        nonzero_scalars = [
+            gradient.count_nonzero() > 0 for gradient in gradients
+        ]
+        finite_max_scalars = [
+            self.torch.where(
+                self.torch.isfinite(gradient),
+                gradient.abs(),
+                self.torch.zeros((), dtype=gradient.dtype, device=gradient.device),
+            ).max()
+            for gradient in gradients
+        ]
+        finite_sum_scalars = [
+            self.torch.where(
+                self.torch.isfinite(gradient),
+                gradient.abs(),
+                self.torch.zeros((), dtype=gradient.dtype, device=gradient.device),
+            ).sum()
+            for gradient in gradients
+        ]
+        scalar_authorities = (
+            finite_scalars
+            + nonzero_scalars
+            + finite_max_scalars
+            + finite_sum_scalars
+        )
+        if scalar_authorities and self.device_manager.config.use_tt:
+            import torch_xla
+
+            torch_xla._XLAC._xla_sync_multi(
+                scalar_authorities,
+                devices=[],
+                wait=True,
+                sync_xla_data=True,
+            )
+        finite = [bool(value.cpu().item()) for value in finite_scalars]
+        nonzero = [bool(value.cpu().item()) for value in nonzero_scalars]
+        maxima = [float(value.cpu().item()) for value in finite_max_scalars]
+        sums = [float(value.cpu().item()) for value in finite_sum_scalars]
+        nonfinite_names = [
+            name
+            for (name, _gradient), is_finite in zip(named_gradients, finite)
+            if not is_finite
+        ]
+        zero_names = [
+            name for (name, _gradient), has_values in zip(named_gradients, nonzero)
+            if not has_values
+        ]
+        self.gradient_audit = {
+            "boundary": "accumulated_pre_clip",
+            "tensor_count": len(gradients),
+            "nonzero_tensor_count": sum(
+                nonzero
+            ),
+            "nonfinite_tensor_count": sum(
+                not value for value in finite
+            ),
+            "nonfinite_tensor_names": nonfinite_names,
+            "zero_tensor_count": len(zero_names),
+            "zero_tensor_names": zero_names,
+            "max_abs": max(
+                maxima,
+                default=0.0,
+            ),
+            "sum_abs": sum(sums),
+        }
 
     def clip_grad_norm(self, maximum: float) -> None:
         started = perf_counter()
@@ -361,6 +523,13 @@ class TorchXlaTrainingOps:
                 gradient_unscale_factor=self.backward_loss_scale,
             )
             self._record_phase("clip_grad_norm", started)
+            if self.audit_gradients:
+                self._audit_sync()
+                self._audit_clipped_gradients = self._named_hashes([
+                    (name, parameter.grad)
+                    for name, parameter in self.trainable_named_parameters
+                    if parameter.grad is not None
+                ])
             return
         if self.tt_clip_mode == "packed_exact_norm":
             if self.backward_loss_scale != 1.0:
@@ -388,6 +557,17 @@ class TorchXlaTrainingOps:
 
                 torch_xla.sync(wait=True)
             self._record_phase("clip_grad_norm", started)
+            if self.audit_gradients:
+                self._audit_sync()
+                logical_gradients = self.optimizer.logical_gradient_tensors()
+                self._audit_clipped_gradients = self._named_hashes(list(zip(
+                    (
+                        name
+                        for name, _parameter in self.trainable_named_parameters
+                    ),
+                    logical_gradients,
+                    strict=True,
+                )))
             return
         if self.backward_loss_scale != 1.0:
             with self.torch.no_grad():
@@ -406,29 +586,19 @@ class TorchXlaTrainingOps:
 
             torch_xla.sync(wait=True)
         self._record_phase("clip_grad_norm", started)
+        if self.audit_gradients:
+            self._audit_sync()
+            self._audit_clipped_gradients = self._named_hashes([
+                (name, parameter.grad)
+                for name, parameter in self.trainable_named_parameters
+                if parameter.grad is not None
+            ])
 
     def optimizer_step(self) -> None:
         started = perf_counter()
-        if self.audit_gradients and self.gradient_audit is None:
-            gradients = [
-                parameter.grad.detach().cpu()
-                for parameter in self.trainable_parameters
-                if parameter.grad is not None
-            ]
-            self.gradient_audit = {
-                "tensor_count": len(gradients),
-                "nonzero_tensor_count": sum(
-                    bool(gradient.count_nonzero().item())
-                    for gradient in gradients
-                ),
-                "max_abs": max(
-                    (float(gradient.abs().max()) for gradient in gradients),
-                    default=0.0,
-                ),
-                "sum_abs": sum(
-                    float(gradient.abs().sum()) for gradient in gradients
-                ),
-            }
+        # Fused-loop variants can skip the ordinary pre-optimizer boundary;
+        # keep the same audit contract as a safe fallback in that case.
+        self.audit_gradient_state()
         if self.host_master_parameters is not None:
             for device_parameter, master_parameter in zip(
                 self.trainable_parameters,
@@ -457,9 +627,36 @@ class TorchXlaTrainingOps:
 
                 torch_xla.sync(wait=True)
             self._record_phase("optimizer_step", started)
+            self._capture_evolving_audit()
             return
         self.device_manager.optimizer_step(self.optimizer)
+        self._capture_evolving_audit()
         self._record_phase("optimizer_step", started)
+
+    def _capture_evolving_audit(self) -> None:
+        if not self.audit_gradients:
+            return
+        if (
+            self._audit_pending_loss is None
+            or self._audit_raw_gradients is None
+            or self._audit_clipped_gradients is None
+        ):
+            raise RuntimeError("safe evolving-state audit is missing a step phase")
+        self._audit_sync()
+        first, second = self._logical_optimizer_moments()
+        self.evolving_audit.append({
+            "step": len(self.evolving_audit) + 1,
+            "loss": self._tensor_hash(self._audit_pending_loss),
+            "loss_value": float(self._audit_pending_loss.detach().cpu().item()),
+            "raw_gradients": self._audit_raw_gradients,
+            "clipped_gradients": self._audit_clipped_gradients,
+            "parameters": self._named_hashes(self.trainable_named_parameters),
+            "first_moment": first,
+            "second_moment": second,
+        })
+        self._audit_pending_loss = None
+        self._audit_raw_gradients = None
+        self._audit_clipped_gradients = None
 
     def scheduler_step(self) -> None:
         if self.scheduler is not None:

@@ -201,6 +201,7 @@ class ResidentQualification:
     rank: int
     batch_size: int
     sequence_length: int
+    target_signature: tuple[tuple[str, int], ...]
     contract: str
     source_bundle: str
     descriptor_bundle: str
@@ -212,12 +213,14 @@ class ResidentQualification:
 _RESIDENT_QUALIFICATIONS = (
     ResidentQualification(
         "738434b016f9144dce8cc44c", 8, 1, 128,
+        tuple((role, 30) for role in ("q", "k", "v", "o", "gate", "up", "down")),
         "smol_geometry_20_step_exact",
         "generated/smollm2_resident_layer_backward_sequence_v8",
         "generated/adamw_descriptors_smollm2_30layer_exact_v1",
     ),
     ResidentQualification(
         "491a95b4f0dc7ec66c77a07a", 16, 1, 128,
+        tuple((role, 24) for role in ("q", "k", "v", "o", "gate", "up", "down")),
         "qwen_geometry_20_step_exact",
         "generated/qwen_resident_layer_backward_sequence_v12",
         "generated/adamw_descriptors_qwen_24layer_exact_v1",
@@ -451,17 +454,44 @@ def _resident_qualification(
     rank: int,
     batch_size: int,
     sequence_length: int,
+    lora_targets: tuple[LoRATargetGeometry, ...],
 ) -> ResidentQualification | None:
-    return next(
-        (
-            item for item in _RESIDENT_QUALIFICATIONS
-            if item.semantic_fingerprint == descriptor.semantic_fingerprint
-            and item.rank == rank
-            and item.batch_size == batch_size
-            and item.sequence_length == sequence_length
-        ),
-        None,
+    target_signature = tuple(sorted(
+        (item.role, item.instances) for item in lora_targets
+    ))
+    geometry_matches = (
+        item for item in _RESIDENT_QUALIFICATIONS
+        if item.semantic_fingerprint == descriptor.semantic_fingerprint
+        and item.rank == rank
+        and item.batch_size == batch_size
+        and item.sequence_length == sequence_length
     )
+    requested = dict(target_signature)
+    for item in geometry_matches:
+        physical = dict(item.target_signature)
+        # The qualified resident program has a fixed slot for all seven
+        # canonical projections.  A semantic subset is executable by packing
+        # all-zero A/B factors into inactive slots; those slots produce no
+        # output or gradient and never enter logical checkpoints/exports.
+        # Instance counts must still match exactly so partial-layer targeting
+        # cannot be mistaken for this safe fixed-ABI representation.
+        if requested and all(
+            role in physical and physical[role] == instances
+            for role, instances in requested.items()
+        ):
+            if tuple(sorted(item.target_signature)) == target_signature:
+                return item
+            return ResidentQualification(
+                semantic_fingerprint=item.semantic_fingerprint,
+                rank=item.rank,
+                batch_size=item.batch_size,
+                sequence_length=item.sequence_length,
+                target_signature=target_signature,
+                contract=f"{item.contract}_zero_inactive_targets",
+                source_bundle=item.source_bundle,
+                descriptor_bundle=item.descriptor_bundle,
+            )
+    return None
 
 
 def resident_qualification_for_plan(
@@ -474,6 +504,7 @@ def resident_qualification_for_plan(
         plan.rank,
         plan.batch_size,
         plan.sequence_length,
+        plan.lora_targets,
     )
 
 
@@ -576,6 +607,16 @@ def plan_execution(
             moe.expert_capacity_factor is not None
             and moe.overflow_policy in {"drop", "residual"}
         )
+        dynamic_no_capacity = (
+            not capacity_bucketed
+            and moe.expert_capacity_factor is None
+            and descriptor.dtype == "bfloat16"
+            and logical_tokens % TILE_SIZE == 0
+            and descriptor.hidden_size % TILE_SIZE == 0
+            and expert_i % TILE_SIZE == 0
+            and moe.expert_count <= 32
+            and moe.top_k <= 8
+        )
         if capacity_bucketed:
             capacity = int(math.ceil(
                 moe.expert_capacity_factor
@@ -605,10 +646,37 @@ def plan_execution(
             moe_weight_replication_avoided_bytes = (
                 assignments * per_assignment_weights * dtype_bytes
             )
+        elif dynamic_no_capacity:
+            # Each expert owns one deterministic slot per token. This is an
+            # exact no-drop bound because top-k cannot select the same expert
+            # twice for a token. Only occupied 32-row blocks enter sparse
+            # matmul; the physical slot tensor is bounded and no expert weight
+            # is gathered per routed assignment.
+            packed_slots = logical_tokens * moe.expert_count
+            dispatch_elements = assignments * packed_slots
+            moe_routed_scratch_bytes = (
+                dispatch_elements * dtype_bytes
+                + assignments * descriptor.hidden_size * dtype_bytes
+            )
+            moe_selected_activation_bytes = (
+                packed_slots
+                * (2 * descriptor.hidden_size + selected_intermediate_width)
+                * dtype_bytes
+            )
+            # Boolean assignment map plus compact inverse/position metadata.
+            moe_routing_workspace_bytes = (
+                dispatch_elements
+                + packed_slots * 4
+                + assignments * (8 + 8)
+            )
+            moe_execution_schedule = "dynamic_native_expert_bucketed"
+            moe_packed_assignment_slots = packed_slots
+            moe_weight_replication_avoided_bytes = (
+                assignments * per_assignment_weights * dtype_bytes
+            )
         else:
-            # Architectures without a semantic capacity bound retain the exact
-            # selected-assignment fallback until the dynamic native expert
-            # scheduler is qualified. Never truncate them to make a plan fit.
+            # Unsupported dynamic geometries retain the exact selected-
+            # assignment fallback. Never truncate them to make a plan fit.
             moe_routed_scratch_bytes = (
                 assignments * per_assignment_weights * dtype_bytes
             )
@@ -639,7 +707,7 @@ def plan_execution(
     memory_admitted = estimated_device_bytes <= hardware.dram_bytes
 
     resident = _resident_qualification(
-        descriptor, rank, batch_size, sequence_length
+        descriptor, rank, batch_size, sequence_length, targets
     )
     if resident is not None:
         memory_plan = ExecutionMemoryPlan(
@@ -804,6 +872,9 @@ def plan_execution(
         capacity_bucketed = (
             moe_execution_schedule == "expert_capacity_bucketed"
         )
+        dynamic_no_capacity = (
+            moe_execution_schedule == "dynamic_native_expert_bucketed"
+        )
         sparse_geometry_qualified = (
             descriptor.dtype == "bfloat16"
             and descriptor.hidden_size % TILE_SIZE == 0
@@ -818,6 +889,8 @@ def plan_execution(
                 if sparse_geometry_qualified else "safe_device_selected_experts"
             ),
             (
+                "canonical_sparse_moe_dynamic_no_drop_v1"
+                if sparse_geometry_qualified and dynamic_no_capacity else
                 "canonical_sparse_moe_capacity_bucketed_v1"
                 if sparse_geometry_qualified and capacity_bucketed else
                 "canonical_sparse_moe_v1"
@@ -828,6 +901,10 @@ def plan_execution(
                 if sparse_geometry_qualified else None
             ),
             (
+                "router and exact per-expert positions stay on device; one "
+                "slot per token bounds every expert without capacity loss; "
+                "only occupied 32-row expert blocks execute"
+                if sparse_geometry_qualified and dynamic_no_capacity else
                 "router, deterministic top-k, capacity packing, expert-batched "
                 "matmuls and weighted combine stay on device; expert matrices "
                 "are not replicated per assignment"
