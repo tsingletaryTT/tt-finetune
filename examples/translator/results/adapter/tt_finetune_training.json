@@ -1,0 +1,14 @@
+{
+  "format": "tt-finetune-training-metadata-v1",
+  "base_model_name_or_path": "HuggingFaceTB/SmolLM2-135M",
+  "base_model_revision": null,
+  "requested_memory_mode": "auto",
+  "selected_frozen_weight_dtype": "bf16",
+  "numerical_contract": "bf16_exact",
+  "training_dtype": "bfloat16",
+  "adapter_method": "lora",
+  "adapter_features": [],
+  "lora_plus_lr_ratio": null,
+  "layers_to_transform": null,
+  "layers_pattern": null
+}

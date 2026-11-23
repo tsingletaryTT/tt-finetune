@@ -1,0 +1,748 @@
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: reset lease a598ac but keep it held\nCommand: gozer reset a598ac<|endoftext|>"}
+{"text": "Request: extend lease f552cc by 45m\nCommand: gozer renew f552cc --expect 45m<|endoftext|>"}
+{"text": "Request: I am claude:keymaster, run python examples/quickstart.py with 4 chips, reason run the unit tests\nCommand: gozer run --chips 4 --who claude:keymaster --reason \"run the unit tests\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: wait for ticket 43a6\nCommand: gozer wait 43a6<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: lease 2 chips for bench-bot to benchmark training steps\nCommand: gozer acquire --chips 2 --who bench-bot --reason \"benchmark training steps\"<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: print the exports for lease 780de9\nCommand: gozer env 780de9<|endoftext|>"}
+{"text": "Request: take a lease on 2 chips as claude:tt-finetune for profile the decoder\nCommand: gozer acquire --chips 2 --who claude:tt-finetune --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: block until ticket acc9 is granted\nCommand: gozer wait acc9<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: release lease 56fe5d\nCommand: gozer release 56fe5d<|endoftext|>"}
+{"text": "Request: hold until ticket 85e4 is ready\nCommand: gozer wait 85e4<|endoftext|>"}
+{"text": "Request: lease 1 chips as claude:tt-finetune and run python train.py to validate the adapter\nCommand: gozer run --chips 1 --who claude:tt-finetune --reason \"validate the adapter\" -- python train.py<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: cancel ticket 8b7f\nCommand: gozer cancel 8b7f<|endoftext|>"}
+{"text": "Request: release lease f552cc\nCommand: gozer release f552cc<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: which env variables does lease bdc189 set\nCommand: gozer env bdc189<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: remove ticket 43a6 from the queue\nCommand: gozer cancel 43a6<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: which env variables does lease 5023d8 set\nCommand: gozer env 5023d8<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: store the snapshot as run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 1181f7\nCommand: gozer release 1181f7<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: I am claude:keymaster, run python bench.py --steps 50 with 1 chips, reason run the unit tests\nCommand: gozer run --chips 1 --who claude:keymaster --reason \"run the unit tests\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: renew lease 319aea for 10m\nCommand: gozer renew 319aea --expect 10m<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: wait on queue ticket 1286\nCommand: gozer wait 1286<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: heartbeat lease 56fe5d with an expected 2h\nCommand: gozer renew 56fe5d --expect 2h<|endoftext|>"}
+{"text": "Request: store the snapshot as run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: heartbeat lease 5023d8 with an expected 30m\nCommand: gozer renew 5023d8 --expect 30m<|endoftext|>"}
+{"text": "Request: give back lease bdc189\nCommand: gozer release bdc189<|endoftext|>"}
+{"text": "Request: write the device snapshot into run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 56fe5d\nCommand: gozer reset 56fe5d<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: wait for ticket 9d45\nCommand: gozer wait 9d45<|endoftext|>"}
+{"text": "Request: lease 2 chips as alice and run python examples/quickstart.py to benchmark training steps\nCommand: gozer run --chips 2 --who alice --reason \"benchmark training steps\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: cancel ticket 7069\nCommand: gozer cancel 7069<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: acquire 1 chips, I am claude:optimize, reason: profile the decoder\nCommand: gozer acquire --chips 1 --who claude:optimize --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: I no longer need ticket d690, cancel it\nCommand: gozer cancel d690<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: reset the chips of lease 5d960c in place\nCommand: gozer reset 5d960c<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: I need 1 chips for profile the decoder, my name is claude:keymaster\nCommand: gozer acquire --chips 1 --who claude:keymaster --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: reset the chips of lease 780de9 in place\nCommand: gozer reset 780de9<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: reset the chips of lease 319aea in place\nCommand: gozer reset 319aea<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: extend lease 941acf by 30m\nCommand: gozer renew 941acf --expect 30m<|endoftext|>"}
+{"text": "Request: lease 4 chips for bench-bot to smoke test the install\nCommand: gozer acquire --chips 4 --who bench-bot --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: renew lease 5d960c for 10m\nCommand: gozer renew 5d960c --expect 10m<|endoftext|>"}
+{"text": "Request: store the snapshot as run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: I no longer need ticket 7187, cancel it\nCommand: gozer cancel 7187<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: block until ticket ada2 is granted\nCommand: gozer wait ada2<|endoftext|>"}
+{"text": "Request: I am done with lease 780de9, free it\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 1181f7\nCommand: gozer reset 1181f7<|endoftext|>"}
+{"text": "Request: renew lease 319aea for 45m\nCommand: gozer renew 319aea --expect 45m<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 6f3adc\nCommand: gozer reset 6f3adc<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease f552cc\nCommand: gozer reset f552cc<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 780de9\nCommand: gozer reset 780de9<|endoftext|>"}
+{"text": "Request: save a snapshot to state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: remove ticket 8b7f from the queue\nCommand: gozer cancel 8b7f<|endoftext|>"}
+{"text": "Request: acquire 4 chips, I am claude:optimize, reason: run the unit tests\nCommand: gozer acquire --chips 4 --who claude:optimize --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: give back lease bdc189\nCommand: gozer release bdc189<|endoftext|>"}
+{"text": "Request: print the exports for lease bdc189\nCommand: gozer env bdc189<|endoftext|>"}
+{"text": "Request: I am done with lease f552cc, free it\nCommand: gozer release f552cc<|endoftext|>"}
+{"text": "Request: run python bench.py --steps 50 on 1 chips as claude:keymaster to profile the decoder\nCommand: gozer run --chips 1 --who claude:keymaster --reason \"profile the decoder\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: cancel ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: reset the chips of lease 5d960c in place\nCommand: gozer reset 5d960c<|endoftext|>"}
+{"text": "Request: take a lease on 4 chips as claude:tt-finetune for collect a trace\nCommand: gozer acquire --chips 4 --who claude:tt-finetune --reason \"collect a trace\"<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: wait on queue ticket 43a6\nCommand: gozer wait 43a6<|endoftext|>"}
+{"text": "Request: save a snapshot to before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: give me export lines for a598ac\nCommand: gozer env a598ac<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 5d960c\nCommand: gozer reset 5d960c<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: reset the chips of lease 941acf in place\nCommand: gozer reset 941acf<|endoftext|>"}
+{"text": "Request: hold until ticket d690 is ready\nCommand: gozer wait d690<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: remove ticket 7187 from the queue\nCommand: gozer cancel 7187<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: hand back the chips of lease a598ac\nCommand: gozer release a598ac<|endoftext|>"}
+{"text": "Request: extend lease 6f3adc by 2h\nCommand: gozer renew 6f3adc --expect 2h<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: reset lease 5023d8 but keep it held\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: extend lease 941acf by 30m\nCommand: gozer renew 941acf --expect 30m<|endoftext|>"}
+{"text": "Request: give me export lines for 780de9\nCommand: gozer env 780de9<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I am done with lease 5023d8, free it\nCommand: gozer release 5023d8<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: lease 2 chips for bench-bot to profile the decoder\nCommand: gozer acquire --chips 2 --who bench-bot --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: keep lease 1181f7 alive, expect 2h more\nCommand: gozer renew 1181f7 --expect 2h<|endoftext|>"}
+{"text": "Request: cancel ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: take a lease on 4 chips as claude:keymaster for run the unit tests\nCommand: gozer acquire --chips 4 --who claude:keymaster --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 1483d7\nCommand: gozer env 1483d7<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: reset lease 5023d8 but keep it held\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: renew lease 56fe5d for 30m\nCommand: gozer renew 56fe5d --expect 30m<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print the exports for lease bdc189\nCommand: gozer env bdc189<|endoftext|>"}
+{"text": "Request: drop queue ticket 9d45\nCommand: gozer cancel 9d45<|endoftext|>"}
+{"text": "Request: wait on queue ticket 7187\nCommand: gozer wait 7187<|endoftext|>"}
+{"text": "Request: keep lease 5d960c alive, expect 45m more\nCommand: gozer renew 5d960c --expect 45m<|endoftext|>"}
+{"text": "Request: give back lease 780de9\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: which env variables does lease f552cc set\nCommand: gozer env f552cc<|endoftext|>"}
+{"text": "Request: write the device snapshot into snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: execute python train.py under a 1 chip lease, who is bench-bot, to validate the adapter\nCommand: gozer run --chips 1 --who bench-bot --reason \"validate the adapter\" -- python train.py<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: acquire 4 chips, I am claude:tt-finetune, reason: smoke test the install\nCommand: gozer acquire --chips 4 --who claude:tt-finetune --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: remove ticket 9d45 from the queue\nCommand: gozer cancel 9d45<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: heartbeat lease 941acf with an expected 2h\nCommand: gozer renew 941acf --expect 2h<|endoftext|>"}
+{"text": "Request: execute python train.py under a 4 chip lease, who is claude:optimize, to validate the adapter\nCommand: gozer run --chips 4 --who claude:optimize --reason \"validate the adapter\" -- python train.py<|endoftext|>"}
+{"text": "Request: I no longer need ticket d33c, cancel it\nCommand: gozer cancel d33c<|endoftext|>"}
+{"text": "Request: remove ticket acc9 from the queue\nCommand: gozer cancel acc9<|endoftext|>"}
+{"text": "Request: give back lease 1483d7\nCommand: gozer release 1483d7<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: write the device snapshot into before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: print the exports for lease 780de9\nCommand: gozer env 780de9<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: hold until ticket d690 is ready\nCommand: gozer wait d690<|endoftext|>"}
+{"text": "Request: write the device snapshot into snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: heartbeat lease 6f3adc with an expected 45m\nCommand: gozer renew 6f3adc --expect 45m<|endoftext|>"}
+{"text": "Request: I need 2 chips for profile the decoder, my name is claude:keymaster\nCommand: gozer acquire --chips 2 --who claude:keymaster --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: keep lease 319aea alive, expect 45m more\nCommand: gozer renew 319aea --expect 45m<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: cancel ticket 1286\nCommand: gozer cancel 1286<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: print the exports for lease 56fe5d\nCommand: gozer env 56fe5d<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 56fe5d\nCommand: gozer reset 56fe5d<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 5d960c\nCommand: gozer release 5d960c<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 5023d8\nCommand: gozer release 5023d8<|endoftext|>"}
+{"text": "Request: lease 4 chips as alice and run tt-smi -s to run the unit tests\nCommand: gozer run --chips 4 --who alice --reason \"run the unit tests\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: take a lease on 2 chips as claude:keymaster for profile the decoder\nCommand: gozer acquire --chips 2 --who claude:keymaster --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: renew lease a598ac for 45m\nCommand: gozer renew a598ac --expect 45m<|endoftext|>"}
+{"text": "Request: give back lease bdc189\nCommand: gozer release bdc189<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: give back lease 5d960c\nCommand: gozer release 5d960c<|endoftext|>"}
+{"text": "Request: keep lease 1483d7 alive, expect 45m more\nCommand: gozer renew 1483d7 --expect 45m<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I am done with lease 780de9, free it\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: drop queue ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: I no longer need ticket 8b7f, cancel it\nCommand: gozer cancel 8b7f<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: acquire 2 chips, I am alice, reason: smoke test the install\nCommand: gozer acquire --chips 2 --who alice --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: I am done with lease 1483d7, free it\nCommand: gozer release 1483d7<|endoftext|>"}
+{"text": "Request: block until ticket ada2 is granted\nCommand: gozer wait ada2<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 6f3adc\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: release lease 5023d8\nCommand: gozer release 5023d8<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 5d960c\nCommand: gozer reset 5d960c<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: remove ticket d33c from the queue\nCommand: gozer cancel d33c<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: execute python train.py under a 4 chip lease, who is bench-bot, to smoke test the install\nCommand: gozer run --chips 4 --who bench-bot --reason \"smoke test the install\" -- python train.py<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 5d960c\nCommand: gozer reset 5d960c<|endoftext|>"}
+{"text": "Request: release lease 5d960c\nCommand: gozer release 5d960c<|endoftext|>"}
+{"text": "Request: print the exports for lease 6f3adc\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: reset lease bdc189 but keep it held\nCommand: gozer reset bdc189<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: lease 3 chips for alice to smoke test the install\nCommand: gozer acquire --chips 3 --who alice --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: run pytest tests/test_decoder.py on 2 chips as claude:optimize to smoke test the install\nCommand: gozer run --chips 2 --who claude:optimize --reason \"smoke test the install\" -- pytest tests/test_decoder.py<|endoftext|>"}
+{"text": "Request: wait on queue ticket 8b97\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: give me export lines for f552cc\nCommand: gozer env f552cc<|endoftext|>"}
+{"text": "Request: extend lease 780de9 by 45m\nCommand: gozer renew 780de9 --expect 45m<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: I am done with lease 1181f7, free it\nCommand: gozer release 1181f7<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: I am bench-bot, run python examples/quickstart.py with 1 chips, reason collect a trace\nCommand: gozer run --chips 1 --who bench-bot --reason \"collect a trace\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: wait for ticket 8b7f\nCommand: gozer wait 8b7f<|endoftext|>"}
+{"text": "Request: acquire 2 chips, I am alice, reason: profile the decoder\nCommand: gozer acquire --chips 2 --who alice --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: wait for ticket 8b97\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 780de9\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: wait for ticket 9d45\nCommand: gozer wait 9d45<|endoftext|>"}
+{"text": "Request: keep lease a598ac alive, expect 30m more\nCommand: gozer renew a598ac --expect 30m<|endoftext|>"}
+{"text": "Request: wait for ticket 8b7f\nCommand: gozer wait 8b7f<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: drop queue ticket 7069\nCommand: gozer cancel 7069<|endoftext|>"}
+{"text": "Request: lease 3 chips for bench-bot to validate the adapter\nCommand: gozer acquire --chips 3 --who bench-bot --reason \"validate the adapter\"<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: execute python train.py under a 1 chip lease, who is claude:keymaster, to smoke test the install\nCommand: gozer run --chips 1 --who claude:keymaster --reason \"smoke test the install\" -- python train.py<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: run tt-smi -s on 1 chips as claude:keymaster to smoke test the install\nCommand: gozer run --chips 1 --who claude:keymaster --reason \"smoke test the install\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: release lease 1483d7\nCommand: gozer release 1483d7<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 780de9\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: I no longer need ticket 7069, cancel it\nCommand: gozer cancel 7069<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: keep lease 5d960c alive, expect 45m more\nCommand: gozer renew 5d960c --expect 45m<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 780de9\nCommand: gozer env 780de9<|endoftext|>"}
+{"text": "Request: execute python bench.py --steps 50 under a 4 chip lease, who is claude:keymaster, to validate the adapter\nCommand: gozer run --chips 4 --who claude:keymaster --reason \"validate the adapter\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: print the exports for lease 780de9\nCommand: gozer env 780de9<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: release lease 1483d7\nCommand: gozer release 1483d7<|endoftext|>"}
+{"text": "Request: print the exports for lease 5023d8\nCommand: gozer env 5023d8<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: reset the chips of lease 780de9 in place\nCommand: gozer reset 780de9<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I am claude:optimize, run python train.py with 4 chips, reason validate the adapter\nCommand: gozer run --chips 4 --who claude:optimize --reason \"validate the adapter\" -- python train.py<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 941acf\nCommand: gozer reset 941acf<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: give me export lines for 941acf\nCommand: gozer env 941acf<|endoftext|>"}
+{"text": "Request: which env variables does lease f552cc set\nCommand: gozer env f552cc<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: take a lease on 4 chips as claude:keymaster for benchmark training steps\nCommand: gozer acquire --chips 4 --who claude:keymaster --reason \"benchmark training steps\"<|endoftext|>"}
+{"text": "Request: I need 1 chips for collect a trace, my name is bench-bot\nCommand: gozer acquire --chips 1 --who bench-bot --reason \"collect a trace\"<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: hold until ticket 8b97 is ready\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: save a snapshot to state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: reset lease 319aea but keep it held\nCommand: gozer reset 319aea<|endoftext|>"}
+{"text": "Request: take a lease on 4 chips as bench-bot for smoke test the install\nCommand: gozer acquire --chips 4 --who bench-bot --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: drop queue ticket d690\nCommand: gozer cancel d690<|endoftext|>"}
+{"text": "Request: hold until ticket 8b7f is ready\nCommand: gozer wait 8b7f<|endoftext|>"}
+{"text": "Request: execute tt-smi -s under a 3 chip lease, who is alice, to profile the decoder\nCommand: gozer run --chips 3 --who alice --reason \"profile the decoder\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: heartbeat lease 5023d8 with an expected 10m\nCommand: gozer renew 5023d8 --expect 10m<|endoftext|>"}
+{"text": "Request: run python bench.py --steps 50 on 1 chips as claude:tt-finetune to run the unit tests\nCommand: gozer run --chips 1 --who claude:tt-finetune --reason \"run the unit tests\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: give back lease 1181f7\nCommand: gozer release 1181f7<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: I need 1 chips for benchmark training steps, my name is claude:keymaster\nCommand: gozer acquire --chips 1 --who claude:keymaster --reason \"benchmark training steps\"<|endoftext|>"}
+{"text": "Request: give me export lines for 941acf\nCommand: gozer env 941acf<|endoftext|>"}
+{"text": "Request: drop queue ticket 8b97\nCommand: gozer cancel 8b97<|endoftext|>"}
+{"text": "Request: store the snapshot as state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 5023d8\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: save a snapshot to before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: which env variables does lease bdc189 set\nCommand: gozer env bdc189<|endoftext|>"}
+{"text": "Request: wait on queue ticket d690\nCommand: gozer wait d690<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 1181f7\nCommand: gozer release 1181f7<|endoftext|>"}
+{"text": "Request: renew lease 5d960c for 2h\nCommand: gozer renew 5d960c --expect 2h<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: I need 2 chips for run the unit tests, my name is bench-bot\nCommand: gozer acquire --chips 2 --who bench-bot --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: give back lease f552cc\nCommand: gozer release f552cc<|endoftext|>"}
+{"text": "Request: block until ticket 8b97 is granted\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: cancel ticket 7069\nCommand: gozer cancel 7069<|endoftext|>"}
+{"text": "Request: save a snapshot to run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: heartbeat lease 56fe5d with an expected 45m\nCommand: gozer renew 56fe5d --expect 45m<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: I no longer need ticket 9d45, cancel it\nCommand: gozer cancel 9d45<|endoftext|>"}
+{"text": "Request: save a snapshot to run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: renew lease a598ac for 30m\nCommand: gozer renew a598ac --expect 30m<|endoftext|>"}
+{"text": "Request: which env variables does lease f552cc set\nCommand: gozer env f552cc<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I no longer need ticket 7069, cancel it\nCommand: gozer cancel 7069<|endoftext|>"}
+{"text": "Request: I am bench-bot, run python examples/quickstart.py with 2 chips, reason validate the adapter\nCommand: gozer run --chips 2 --who bench-bot --reason \"validate the adapter\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: run python train.py on 3 chips as bench-bot to profile the decoder\nCommand: gozer run --chips 3 --who bench-bot --reason \"profile the decoder\" -- python train.py<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: heartbeat lease 941acf with an expected 30m\nCommand: gozer renew 941acf --expect 30m<|endoftext|>"}
+{"text": "Request: wait for ticket 7187\nCommand: gozer wait 7187<|endoftext|>"}
+{"text": "Request: wait on queue ticket d690\nCommand: gozer wait d690<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: acquire 3 chips, I am claude:tt-finetune, reason: profile the decoder\nCommand: gozer acquire --chips 3 --who claude:tt-finetune --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: lease 4 chips as claude:keymaster and run python examples/quickstart.py to collect a trace\nCommand: gozer run --chips 4 --who claude:keymaster --reason \"collect a trace\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease a598ac\nCommand: gozer reset a598ac<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: extend lease 780de9 by 30m\nCommand: gozer renew 780de9 --expect 30m<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: take a lease on 4 chips as claude:keymaster for validate the adapter\nCommand: gozer acquire --chips 4 --who claude:keymaster --reason \"validate the adapter\"<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: lease 1 chips as claude:optimize and run python bench.py --steps 50 to run the unit tests\nCommand: gozer run --chips 1 --who claude:optimize --reason \"run the unit tests\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: drop queue ticket ada2\nCommand: gozer cancel ada2<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: reset lease 5023d8 but keep it held\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 5023d8\nCommand: gozer env 5023d8<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show the environment lines for lease f552cc\nCommand: gozer env f552cc<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: hand back the chips of lease a598ac\nCommand: gozer release a598ac<|endoftext|>"}
+{"text": "Request: block until ticket acc9 is granted\nCommand: gozer wait acc9<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: I am claude:tt-finetune, run python train.py with 1 chips, reason collect a trace\nCommand: gozer run --chips 1 --who claude:tt-finetune --reason \"collect a trace\" -- python train.py<|endoftext|>"}
+{"text": "Request: reset lease 5023d8 but keep it held\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: I need 3 chips for run the unit tests, my name is claude:keymaster\nCommand: gozer acquire --chips 3 --who claude:keymaster --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 6f3adc\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: lease 3 chips for claude:tt-finetune to run the unit tests\nCommand: gozer acquire --chips 3 --who claude:tt-finetune --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: extend lease 1483d7 by 45m\nCommand: gozer renew 1483d7 --expect 45m<|endoftext|>"}
+{"text": "Request: I am done with lease 1483d7, free it\nCommand: gozer release 1483d7<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I no longer need ticket 8b97, cancel it\nCommand: gozer cancel 8b97<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I need 2 chips for validate the adapter, my name is claude:keymaster\nCommand: gozer acquire --chips 2 --who claude:keymaster --reason \"validate the adapter\"<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: run python examples/quickstart.py on 4 chips as claude:tt-finetune to profile the decoder\nCommand: gozer run --chips 4 --who claude:tt-finetune --reason \"profile the decoder\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: wait for ticket 1286\nCommand: gozer wait 1286<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease f552cc\nCommand: gozer reset f552cc<|endoftext|>"}
+{"text": "Request: extend lease 780de9 by 30m\nCommand: gozer renew 780de9 --expect 30m<|endoftext|>"}
+{"text": "Request: write the device snapshot into run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 319aea\nCommand: gozer reset 319aea<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: wait on queue ticket acc9\nCommand: gozer wait acc9<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 780de9\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: store the snapshot as run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: run python bench.py --steps 50 on 3 chips as claude:keymaster to collect a trace\nCommand: gozer run --chips 3 --who claude:keymaster --reason \"collect a trace\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: reset the chips of lease f552cc in place\nCommand: gozer reset f552cc<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: I no longer need ticket 1286, cancel it\nCommand: gozer cancel 1286<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: heartbeat lease 5023d8 with an expected 45m\nCommand: gozer renew 5023d8 --expect 45m<|endoftext|>"}
+{"text": "Request: print the exports for lease 1181f7\nCommand: gozer env 1181f7<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: which env variables does lease 5d960c set\nCommand: gozer env 5d960c<|endoftext|>"}
+{"text": "Request: execute python train.py under a 1 chip lease, who is claude:keymaster, to profile the decoder\nCommand: gozer run --chips 1 --who claude:keymaster --reason \"profile the decoder\" -- python train.py<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 56fe5d\nCommand: gozer reset 56fe5d<|endoftext|>"}
+{"text": "Request: lease 4 chips for bench-bot to profile the decoder\nCommand: gozer acquire --chips 4 --who bench-bot --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: cancel ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: I am claude:optimize, run python bench.py --steps 50 with 2 chips, reason profile the decoder\nCommand: gozer run --chips 2 --who claude:optimize --reason \"profile the decoder\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: block until ticket 1286 is granted\nCommand: gozer wait 1286<|endoftext|>"}
+{"text": "Request: hold until ticket 8b97 is ready\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: lease 3 chips for claude:tt-finetune to validate the adapter\nCommand: gozer acquire --chips 3 --who claude:tt-finetune --reason \"validate the adapter\"<|endoftext|>"}
+{"text": "Request: which ports are leased for serving\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: show the environment lines for lease a598ac\nCommand: gozer env a598ac<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: acquire 4 chips, I am alice, reason: profile the decoder\nCommand: gozer acquire --chips 4 --who alice --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: take a lease on 3 chips as claude:tt-finetune for benchmark training steps\nCommand: gozer acquire --chips 3 --who claude:tt-finetune --reason \"benchmark training steps\"<|endoftext|>"}
+{"text": "Request: give me export lines for 5023d8\nCommand: gozer env 5023d8<|endoftext|>"}
+{"text": "Request: wait for ticket acc9\nCommand: gozer wait acc9<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 780de9\nCommand: gozer reset 780de9<|endoftext|>"}
+{"text": "Request: give me export lines for 319aea\nCommand: gozer env 319aea<|endoftext|>"}
+{"text": "Request: lease 4 chips for alice to run the unit tests\nCommand: gozer acquire --chips 4 --who alice --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: reset the chips of lease 56fe5d in place\nCommand: gozer reset 56fe5d<|endoftext|>"}
+{"text": "Request: I am done with lease 56fe5d, free it\nCommand: gozer release 56fe5d<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: cancel ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: I no longer need ticket 43a6, cancel it\nCommand: gozer cancel 43a6<|endoftext|>"}
+{"text": "Request: I am done with lease 1181f7, free it\nCommand: gozer release 1181f7<|endoftext|>"}
+{"text": "Request: I am bench-bot, run python train.py with 3 chips, reason benchmark training steps\nCommand: gozer run --chips 3 --who bench-bot --reason \"benchmark training steps\" -- python train.py<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: acquire 3 chips, I am claude:tt-finetune, reason: profile the decoder\nCommand: gozer acquire --chips 3 --who claude:tt-finetune --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: print the exports for lease 941acf\nCommand: gozer env 941acf<|endoftext|>"}
+{"text": "Request: save a snapshot to snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: give back lease f552cc\nCommand: gozer release f552cc<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: renew lease 780de9 for 2h\nCommand: gozer renew 780de9 --expect 2h<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: remove ticket 9d45 from the queue\nCommand: gozer cancel 9d45<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: drop queue ticket d33c\nCommand: gozer cancel d33c<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: which env variables does lease 1483d7 set\nCommand: gozer env 1483d7<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: keep lease a598ac alive, expect 2h more\nCommand: gozer renew a598ac --expect 2h<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: release lease 56fe5d\nCommand: gozer release 56fe5d<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: run python train.py on 2 chips as claude:tt-finetune to collect a trace\nCommand: gozer run --chips 2 --who claude:tt-finetune --reason \"collect a trace\" -- python train.py<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: tt-smi, compact view, no network access\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: lease 2 chips for alice to run the unit tests\nCommand: gozer acquire --chips 2 --who alice --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: wait on queue ticket acc9\nCommand: gozer wait acc9<|endoftext|>"}
+{"text": "Request: reset lease f552cc but keep it held\nCommand: gozer reset f552cc<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: I am done with lease 6f3adc, free it\nCommand: gozer release 6f3adc<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 6f3adc\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: store the snapshot as before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: wait on queue ticket 8b97\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: lease 3 chips as claude:tt-finetune and run tt-smi -s to profile the decoder\nCommand: gozer run --chips 3 --who claude:tt-finetune --reason \"profile the decoder\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease bdc189\nCommand: gozer reset bdc189<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 319aea\nCommand: gozer reset 319aea<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: lease 2 chips as claude:keymaster and run python train.py to benchmark training steps\nCommand: gozer run --chips 2 --who claude:keymaster --reason \"benchmark training steps\" -- python train.py<|endoftext|>"}
+{"text": "Request: heartbeat lease 5d960c with an expected 2h\nCommand: gozer renew 5d960c --expect 2h<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: extend lease 1483d7 by 45m\nCommand: gozer renew 1483d7 --expect 45m<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 5023d8\nCommand: gozer release 5023d8<|endoftext|>"}
+{"text": "Request: store the snapshot as snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: list the tenstorrent devices\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: I need 3 chips for profile the decoder, my name is claude:tt-finetune\nCommand: gozer acquire --chips 3 --who claude:tt-finetune --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: acquire 4 chips, I am claude:tt-finetune, reason: run the unit tests\nCommand: gozer acquire --chips 4 --who claude:tt-finetune --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: write the device snapshot into snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: which env variables does lease 6f3adc set\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: give me export lines for 6f3adc\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: run pytest tests/test_decoder.py on 3 chips as alice to validate the adapter\nCommand: gozer run --chips 3 --who alice --reason \"validate the adapter\" -- pytest tests/test_decoder.py<|endoftext|>"}
+{"text": "Request: wait for ticket d33c\nCommand: gozer wait d33c<|endoftext|>"}
+{"text": "Request: extend lease 1181f7 by 10m\nCommand: gozer renew 1181f7 --expect 10m<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: write the device snapshot into run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: wait for ticket 9d45\nCommand: gozer wait 9d45<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: block until ticket 8b7f is granted\nCommand: gozer wait 8b7f<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: take a lease on 1 chips as claude:tt-finetune for smoke test the install\nCommand: gozer acquire --chips 1 --who claude:tt-finetune --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: hold until ticket 1286 is ready\nCommand: gozer wait 1286<|endoftext|>"}
+{"text": "Request: store the snapshot as before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: remove ticket 8b7f from the queue\nCommand: gozer cancel 8b7f<|endoftext|>"}
+{"text": "Request: show which models are being served\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: wait on queue ticket 8b97\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease 780de9\nCommand: gozer reset 780de9<|endoftext|>"}
+{"text": "Request: I am claude:optimize, run pytest tests/test_decoder.py with 4 chips, reason smoke test the install\nCommand: gozer run --chips 4 --who claude:optimize --reason \"smoke test the install\" -- pytest tests/test_decoder.py<|endoftext|>"}
+{"text": "Request: acquire 4 chips, I am bench-bot, reason: smoke test the install\nCommand: gozer acquire --chips 4 --who bench-bot --reason \"smoke test the install\"<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: re-initialise the chips on lease f552cc\nCommand: gozer reset f552cc<|endoftext|>"}
+{"text": "Request: I need 1 chips for run the unit tests, my name is bench-bot\nCommand: gozer acquire --chips 1 --who bench-bot --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: keep lease f552cc alive, expect 30m more\nCommand: gozer renew f552cc --expect 30m<|endoftext|>"}
+{"text": "Request: take a lease on 1 chips as claude:tt-finetune for profile the decoder\nCommand: gozer acquire --chips 1 --who claude:tt-finetune --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: cancel ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: drop queue ticket 1286\nCommand: gozer cancel 1286<|endoftext|>"}
+{"text": "Request: save a snapshot to before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: block until ticket 8b97 is granted\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: I no longer need ticket 9d45, cancel it\nCommand: gozer cancel 9d45<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: acquire 3 chips, I am bench-bot, reason: run the unit tests\nCommand: gozer acquire --chips 3 --who bench-bot --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: keep lease bdc189 alive, expect 30m more\nCommand: gozer renew bdc189 --expect 30m<|endoftext|>"}
+{"text": "Request: execute python examples/quickstart.py under a 2 chip lease, who is claude:optimize, to run the unit tests\nCommand: gozer run --chips 2 --who claude:optimize --reason \"run the unit tests\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: reset the chips of lease 56fe5d in place\nCommand: gozer reset 56fe5d<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: show the queue\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: write the device snapshot into snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 319aea\nCommand: gozer env 319aea<|endoftext|>"}
+{"text": "Request: who is queued for chips\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: release lease bdc189\nCommand: gozer release bdc189<|endoftext|>"}
+{"text": "Request: write the device snapshot into snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: run python train.py on 4 chips as claude:tt-finetune to validate the adapter\nCommand: gozer run --chips 4 --who claude:tt-finetune --reason \"validate the adapter\" -- python train.py<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: give back lease 319aea\nCommand: gozer release 319aea<|endoftext|>"}
+{"text": "Request: print the exports for lease 6f3adc\nCommand: gozer env 6f3adc<|endoftext|>"}
+{"text": "Request: hand back the chips of lease 6f3adc\nCommand: gozer release 6f3adc<|endoftext|>"}
+{"text": "Request: keep lease 5d960c alive, expect 30m more\nCommand: gozer renew 5d960c --expect 30m<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: hold until ticket 1286 is ready\nCommand: gozer wait 1286<|endoftext|>"}
+{"text": "Request: show the boards\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: remove ticket 85e4 from the queue\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: lease 1 chips as claude:optimize and run pytest tests/test_decoder.py to smoke test the install\nCommand: gozer run --chips 1 --who claude:optimize --reason \"smoke test the install\" -- pytest tests/test_decoder.py<|endoftext|>"}
+{"text": "Request: give back lease 780de9\nCommand: gozer release 780de9<|endoftext|>"}
+{"text": "Request: which env variables does lease 5d960c set\nCommand: gozer env 5d960c<|endoftext|>"}
+{"text": "Request: show the chip and board topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: lease 3 chips as bench-bot and run python examples/quickstart.py to smoke test the install\nCommand: gozer run --chips 3 --who bench-bot --reason \"smoke test the install\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: reset lease 780de9 but keep it held\nCommand: gozer reset 780de9<|endoftext|>"}
+{"text": "Request: hold until ticket 43a6 is ready\nCommand: gozer wait 43a6<|endoftext|>"}
+{"text": "Request: store the snapshot as run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: list the boards on the host\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: reset lease 319aea but keep it held\nCommand: gozer reset 319aea<|endoftext|>"}
+{"text": "Request: show who holds the chips\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: renew lease 780de9 for 2h\nCommand: gozer renew 780de9 --expect 2h<|endoftext|>"}
+{"text": "Request: heartbeat lease 1181f7 with an expected 2h\nCommand: gozer renew 1181f7 --expect 2h<|endoftext|>"}
+{"text": "Request: execute python bench.py --steps 50 under a 2 chip lease, who is alice, to benchmark training steps\nCommand: gozer run --chips 2 --who alice --reason \"benchmark training steps\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: give me export lines for 319aea\nCommand: gozer env 319aea<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: what is the current lease state\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: write the device snapshot into snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: lease 1 chips as claude:tt-finetune and run pytest tests/test_decoder.py to profile the decoder\nCommand: gozer run --chips 1 --who claude:tt-finetune --reason \"profile the decoder\" -- pytest tests/test_decoder.py<|endoftext|>"}
+{"text": "Request: save a snapshot to run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: execute python bench.py --steps 50 under a 4 chip lease, who is alice, to profile the decoder\nCommand: gozer run --chips 4 --who alice --reason \"profile the decoder\" -- python bench.py --steps 50<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: give me export lines for 941acf\nCommand: gozer env 941acf<|endoftext|>"}
+{"text": "Request: drop queue ticket 8b97\nCommand: gozer cancel 8b97<|endoftext|>"}
+{"text": "Request: block until ticket d690 is granted\nCommand: gozer wait d690<|endoftext|>"}
+{"text": "Request: cancel ticket 7187\nCommand: gozer cancel 7187<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: release lease 1483d7\nCommand: gozer release 1483d7<|endoftext|>"}
+{"text": "Request: which env variables does lease bdc189 set\nCommand: gozer env bdc189<|endoftext|>"}
+{"text": "Request: I am done with lease bdc189, free it\nCommand: gozer release bdc189<|endoftext|>"}
+{"text": "Request: show the environment lines for lease bdc189\nCommand: gozer env bdc189<|endoftext|>"}
+{"text": "Request: save a snapshot to state.json\nCommand: tt-smi -f state.json<|endoftext|>"}
+{"text": "Request: extend lease bdc189 by 45m\nCommand: gozer renew bdc189 --expect 45m<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 5023d8\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: drop queue ticket d33c\nCommand: gozer cancel d33c<|endoftext|>"}
+{"text": "Request: wait on queue ticket 1286\nCommand: gozer wait 1286<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: take a lease on 4 chips as claude:optimize for validate the adapter\nCommand: gozer acquire --chips 4 --who claude:optimize --reason \"validate the adapter\"<|endoftext|>"}
+{"text": "Request: remove ticket acc9 from the queue\nCommand: gozer cancel acc9<|endoftext|>"}
+{"text": "Request: hold until ticket 7069 is ready\nCommand: gozer wait 7069<|endoftext|>"}
+{"text": "Request: I am claude:optimize, run tt-smi -s with 4 chips, reason run the unit tests\nCommand: gozer run --chips 4 --who claude:optimize --reason \"run the unit tests\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: lease 3 chips as alice and run python examples/quickstart.py to smoke test the install\nCommand: gozer run --chips 3 --who alice --reason \"smoke test the install\" -- python examples/quickstart.py<|endoftext|>"}
+{"text": "Request: reset the chips of lease 5023d8 in place\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: reset lease 6f3adc but keep it held\nCommand: gozer reset 6f3adc<|endoftext|>"}
+{"text": "Request: list the chips grouped by board\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: lease 1 chips for alice to collect a trace\nCommand: gozer acquire --chips 1 --who alice --reason \"collect a trace\"<|endoftext|>"}
+{"text": "Request: what leases ran before\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: renew lease f552cc for 30m\nCommand: gozer renew f552cc --expect 30m<|endoftext|>"}
+{"text": "Request: what boards and chips does this box have\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: show a snapshot of the hardware\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: write the device snapshot into run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: I need 1 chips for profile the decoder, my name is alice\nCommand: gozer acquire --chips 1 --who alice --reason \"profile the decoder\"<|endoftext|>"}
+{"text": "Request: show the compact tt-smi without versions box\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: renew lease 5d960c for 10m\nCommand: gozer renew 5d960c --expect 10m<|endoftext|>"}
+{"text": "Request: remove ticket acc9 from the queue\nCommand: gozer cancel acc9<|endoftext|>"}
+{"text": "Request: list the running services\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: I need 2 chips for run the unit tests, my name is claude:optimize\nCommand: gozer acquire --chips 2 --who claude:optimize --reason \"run the unit tests\"<|endoftext|>"}
+{"text": "Request: who held chips earlier\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: keep lease 319aea alive, expect 2h more\nCommand: gozer renew 319aea --expect 2h<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: hold until ticket 8b97 is ready\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: who has the chips right now\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: show past leases\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: cancel ticket 85e4\nCommand: gozer cancel 85e4<|endoftext|>"}
+{"text": "Request: block until ticket 8b97 is granted\nCommand: gozer wait 8b97<|endoftext|>"}
+{"text": "Request: save a snapshot to run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: dump the tt-smi snapshot\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: execute tt-smi -s under a 1 chip lease, who is alice, to validate the adapter\nCommand: gozer run --chips 1 --who alice --reason \"validate the adapter\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: I am claude:keymaster, run pytest tests/test_decoder.py with 4 chips, reason collect a trace\nCommand: gozer run --chips 4 --who claude:keymaster --reason \"collect a trace\" -- pytest tests/test_decoder.py<|endoftext|>"}
+{"text": "Request: drop queue ticket d690\nCommand: gozer cancel d690<|endoftext|>"}
+{"text": "Request: heartbeat lease 56fe5d with an expected 2h\nCommand: gozer renew 56fe5d --expect 2h<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: release lease 5d960c\nCommand: gozer release 5d960c<|endoftext|>"}
+{"text": "Request: do an in-place reset of lease 5023d8\nCommand: gozer reset 5023d8<|endoftext|>"}
+{"text": "Request: store the snapshot as run1.json\nCommand: tt-smi -f run1.json<|endoftext|>"}
+{"text": "Request: which boards are installed\nCommand: tt-smi -ls<|endoftext|>"}
+{"text": "Request: list the leases and who is waiting\nCommand: gozer status<|endoftext|>"}
+{"text": "Request: store the snapshot as before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: show the environment lines for lease 56fe5d\nCommand: gozer env 56fe5d<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: take a snapshot of the devices\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: print pending lease requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: reset the chips of lease bdc189 in place\nCommand: gozer reset bdc189<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file before.json\nCommand: tt-smi -f before.json<|endoftext|>"}
+{"text": "Request: release lease 6f3adc\nCommand: gozer release 6f3adc<|endoftext|>"}
+{"text": "Request: give me export lines for 5023d8\nCommand: gozer env 5023d8<|endoftext|>"}
+{"text": "Request: print the topology\nCommand: gozer topology<|endoftext|>"}
+{"text": "Request: dump tt-smi info to the file snap.json\nCommand: tt-smi -f snap.json<|endoftext|>"}
+{"text": "Request: run tt-smi -s on 1 chips as claude:optimize to validate the adapter\nCommand: gozer run --chips 1 --who claude:optimize --reason \"validate the adapter\" -- tt-smi -s<|endoftext|>"}
+{"text": "Request: print device telemetry as json\nCommand: tt-smi -s<|endoftext|>"}
+{"text": "Request: open tt-smi in compact mode without the network\nCommand: tt-smi -c --offline<|endoftext|>"}
+{"text": "Request: what is being served and where\nCommand: gozer services<|endoftext|>"}
+{"text": "Request: list the waiting requests\nCommand: gozer queue<|endoftext|>"}
+{"text": "Request: block until ticket 7069 is granted\nCommand: gozer wait 7069<|endoftext|>"}
+{"text": "Request: print the lease history\nCommand: gozer history<|endoftext|>"}
+{"text": "Request: run tt-smi compact and offline\nCommand: tt-smi -c --offline<|endoftext|>"}

@@ -23,3 +23,9 @@ experiment (`docs/superpowers/specs/2026-11-23-ttlang-lora-proxy-design.md`, dra
 - Lease before any device open: `gozer run --chips 1 ...`. A p300c lease grants the whole board (2 chips).
 - `gh` calls to the tenstorrent org fail with a SAML 403 (token revoked); tsingletaryTT repos work.
 - The wheel lives in `~/.venvs/tt-finetune-smoke/.venv` (CPython 3.12). Re-run the patch tool after reinstalling.
+- 2026-11-23: command-translator proof (`examples/translator/`). SmolLM2-135M, rank 16, 1200 steps, batch 1,
+  seq 128, one p300c board, ~0.55 s/step (~225 tokens/s) after the header patch. Held-out set (204 requests with
+  unseen phrasings and slot values): base model 0/204 exact, tuned 85/204 (41.7%). Loss 3.78 (step 25) to ~0.6.
+  Strong on intents with one fixed command (`gozer queue/history/services` 12/12), weak where the model invents
+  subcommands (`gozer withdraw`) or mixes gozer with tt-smi. Training took about 14 min; scoring runs on CPU.
+  Results in `examples/translator/results/`. Not tried: more epochs, rank, completion-only loss.

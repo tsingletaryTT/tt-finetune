@@ -1,0 +1,204 @@
+{"request": "print the served models", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "what boards does tt-smi see", "command": "tt-smi -ls", "pred": "tt-smi -ls", "exact": true, "canonical": true}
+{"request": "get me 1 chips as bob, because I want to check the new firmware", "command": "gozer acquire --chips 1 --who bob --reason \"check the new firmware\"", "pred": "gozer acquire --chips 1 --who cat --reason \"check the new firmware\"", "exact": false, "canonical": false}
+{"request": "show shell exports of lease c13d2a", "command": "gozer env c13d2a", "pred": "gozer env c13d2a", "exact": true, "canonical": true}
+{"request": "lease 1a0ce7 needs 90m longer", "command": "gozer renew 1a0ce7 --expect 90m", "pred": "gozer renew 1a0c7 --expect 90m", "exact": false, "canonical": false}
+{"request": "get the current device snapshot", "command": "tt-smi -s", "pred": "gozer snapshot", "exact": false, "canonical": false}
+{"request": "get the current device snapshot", "command": "tt-smi -s", "pred": "gozer snapshot", "exact": false, "canonical": false}
+{"request": "describe the hardware layout", "command": "gozer topology", "pred": "tt-smi -ls", "exact": false, "canonical": false}
+{"request": "show shell exports of lease 8980aa", "command": "gozer env 8980aa", "pred": "gozer env 8980a", "exact": false, "canonical": false}
+{"request": "give me the gozer status", "command": "gozer status", "pred": "gozer status", "exact": true, "canonical": true}
+{"request": "run pytest tests/test_attention.py on 1 chips for claude:orchard: reproduce the crash", "command": "gozer run --chips 1 --who claude:orchard --reason \"reproduce the crash\" -- pytest tests/test_attention.py", "pred": "gozer run --chips 1 --who claude:orchard: reproduce the crash", "exact": false, "canonical": false}
+{"request": "how are the chips laid out", "command": "gozer topology", "pred": "gozer fashion", "exact": false, "canonical": false}
+{"request": "withdraw ticket 6eb5", "command": "gozer cancel 6eb5", "pred": "gozer withdraw 6abe5", "exact": false, "canonical": false}
+{"request": "start tt-smi offline in compact mode", "command": "tt-smi -c --offline", "pred": "tt-smi -c --offline", "exact": true, "canonical": true}
+{"request": "give me the gozer status", "command": "gozer status", "pred": "gozer status", "exact": true, "canonical": true}
+{"request": "snapshot all tt devices to stdout", "command": "tt-smi -s", "pred": "tt-smi -s", "exact": true, "canonical": true}
+{"request": "return lease 6f67ca", "command": "gozer release 6f67ca", "pred": "gozer lease 6f67a", "exact": false, "canonical": false}
+{"request": "wait until my ticket 2c36 comes up", "command": "gozer wait 2c36", "pred": "gozer wait 2c36", "exact": true, "canonical": true}
+{"request": "what boards does tt-smi see", "command": "tt-smi -ls", "pred": "tt-smi -ls", "exact": true, "canonical": true}
+{"request": "print the served models", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "give me the gozer status", "command": "gozer status", "pred": "gozer status", "exact": true, "canonical": true}
+{"request": "wait until my ticket c257 comes up", "command": "gozer wait c257", "pred": "gozer wait c257", "exact": true, "canonical": true}
+{"request": "run python eval.py --split dev on 1 chips for claude:orchard: check the new firmware", "command": "gozer run --chips 1 --who claude:orchard --reason \"check the new firmware\" -- python eval.py --split dev", "pred": "gozer run --chips 1 --who claude:orchard: checker", "exact": false, "canonical": false}
+{"request": "end lease 1a0ce7", "command": "gozer release 1a0ce7", "pred": "gozer until it is a home-ready chip", "exact": false, "canonical": false}
+{"request": "print board types and bus ids", "command": "tt-smi -ls", "pred": "gozer topology", "exact": false, "canonical": false}
+{"request": "lease 6f67ca needs 1h longer", "command": "gozer renew 6f67ca --expect 1h", "pred": "gozer renew 6f67a --expect 1h", "exact": false, "canonical": false}
+{"request": "compact offline tt-smi please", "command": "tt-smi -c --offline", "pred": "tt-smi -s with the walk the the the the the the the the the the the the the the the the the the the the the the walk the the the the the the one that is in the file tt-smi to the one that is in the file tt", "exact": false, "canonical": false}
+{"request": "snapshot all tt devices to stdout", "command": "tt-smi -s", "pred": "tt-smi -s", "exact": true, "canonical": true}
+{"request": "is anyone using the boards", "command": "gozer status", "pred": "gozer run", "exact": false, "canonical": false}
+{"request": "describe the hardware layout", "command": "gozer topology", "pred": "tt-smi -ls", "exact": false, "canonical": false}
+{"request": "show the gozer history", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "reserve 4 chips under bob: measure decode speed", "command": "gozer acquire --chips 4 --who bob --reason \"measure decode speed\"", "pred": "gozer reserve --chips 4", "exact": false, "canonical": false}
+{"request": "reserve 4 chips under ci-runner: check the new firmware", "command": "gozer acquire --chips 4 --who ci-runner --reason \"check the new firmware\"", "pred": "gozer reserve --chips 4", "exact": false, "canonical": false}
+{"request": "env for lease 1a0ce7", "command": "gozer env 1a0ce7", "pred": "gozer env 1a0c7", "exact": false, "canonical": false}
+{"request": "withdraw ticket c257", "command": "gozer cancel c257", "pred": "gozer withdraw c257", "exact": false, "canonical": false}
+{"request": "pause until 2c36 gets chips", "command": "gozer wait 2c36", "pred": "gozer go", "exact": false, "canonical": false}
+{"request": "put the hardware snapshot in nightly.json", "command": "tt-smi -f nightly.json", "pred": "gozer snap --kets 53 --reason \"network her-coo with the robot\"", "exact": false, "canonical": false}
+{"request": "snapshot all tt devices to stdout", "command": "tt-smi -s", "pred": "tt-smi -s", "exact": true, "canonical": true}
+{"request": "use 4 chips as claude:tt-lang to run pytest tests/test_attention.py, to measure decode speed", "command": "gozer run --chips 4 --who claude:tt-lang --reason \"measure decode speed\" -- pytest tests/test_attention.py", "pred": "gozer run --chips 4 --who claude:tt-lang --reason \"measure measure 1, DIP, and run it by the test-dash-c suite\"", "exact": false, "canonical": false}
+{"request": "scrap queued request f4ea", "command": "gozer cancel f4ea", "pred": "tt-smi -f f4ea", "exact": false, "canonical": false}
+{"request": "withdraw ticket 354d", "command": "gozer cancel 354d", "pred": "gozer withdraw 354d", "exact": false, "canonical": false}
+{"request": "what boards does tt-smi see", "command": "tt-smi -ls", "pred": "tt-smi -ls", "exact": true, "canonical": true}
+{"request": "show the gozer history", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "reset the boards for lease 71f273 without releasing", "command": "gozer reset 71f273", "pred": "gozer reset 71f273", "exact": true, "canonical": true}
+{"request": "what is waiting for a lease", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "put the hardware snapshot in after.json", "command": "tt-smi -f after.json", "pred": "gozer snap before.json", "exact": false, "canonical": false}
+{"request": "reserve 2 chips under claude:tt-lang: check the new firmware", "command": "gozer acquire --chips 2 --who claude:tt-lang --reason \"check the new firmware\"", "pred": "gozer reserve --chips 2 --who claude:tt-lang --reason \"check the new firmware\"", "exact": false, "canonical": false}
+{"request": "run pytest tests/test_attention.py on 2 chips for claude:orchard: reproduce the crash", "command": "gozer run --chips 2 --who claude:orchard --reason \"reproduce the crash\" -- pytest tests/test_attention.py", "pred": "gozer run --chips 2 --who claude:orchard: this is a piece of the machine", "exact": false, "canonical": false}
+{"request": "return lease 71f273", "command": "gozer release 71f273", "pred": "gozer lease 71f273", "exact": false, "canonical": false}
+{"request": "reset the boards for lease 8980aa without releasing", "command": "gozer reset 8980aa", "pred": "gozer reset 8980a", "exact": false, "canonical": false}
+{"request": "compact offline tt-smi please", "command": "tt-smi -c --offline", "pred": "tt-smi -s with the walk the the the the the the the the the the the the the the the the the the the the the the walk the the the the the the one that is in the file tt-smi to the one that is in the file tt", "exact": false, "canonical": false}
+{"request": "describe the hardware layout", "command": "gozer topology", "pred": "tt-smi -ls", "exact": false, "canonical": false}
+{"request": "snapshot the devices into board.json", "command": "tt-smi -f board.json", "pred": "tt-smi -f board.file", "exact": false, "canonical": false}
+{"request": "show shell exports of lease 71f273", "command": "gozer env 71f273", "pred": "gozer env 71f273", "exact": true, "canonical": true}
+{"request": "refresh lease 6f67ca, 20m expected", "command": "gozer renew 6f67ca --expect 20m", "pred": "gozer renew 6f67a --expect 20", "exact": false, "canonical": false}
+{"request": "run pytest tests/test_attention.py on 2 chips for ci-runner: reproduce the crash", "command": "gozer run --chips 2 --who ci-runner --reason \"reproduce the crash\" -- pytest tests/test_attention.py", "pred": "gozer run --chips 2 --who ci-runner --reason \"crash\" -- run pytest tests/test_attention.py", "exact": false, "canonical": false}
+{"request": "scrap queued request 300f", "command": "gozer cancel 300f", "pred": "gozer queue 300f", "exact": false, "canonical": false}
+{"request": "show me the wait queue", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "what is waiting for a lease", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "return lease 8980aa", "command": "gozer release 8980aa", "pred": "gozer lease 8980a", "exact": false, "canonical": false}
+{"request": "show active services", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "reserve 2 chips under claude:tt-lang: debug a hang", "command": "gozer acquire --chips 2 --who claude:tt-lang --reason \"debug a hang\"", "pred": "gozer reserve --chips 2 --who claude:tt-lang --reason \"hung out\"", "exact": false, "canonical": false}
+{"request": "end lease b6ae4b", "command": "gozer release b6ae4b", "pred": "gozer cancel b6a4b", "exact": false, "canonical": false}
+{"request": "wait until my ticket 2c36 comes up", "command": "gozer wait 2c36", "pred": "gozer wait 2c36", "exact": true, "canonical": true}
+{"request": "run pytest tests/test_attention.py on 4 chips for bob: debug a hang", "command": "gozer run --chips 4 --who bob --reason \"debug a hang\" -- pytest tests/test_attention.py", "pred": "gozer run --chips 4 --who bertos: Dump the Dump", "exact": false, "canonical": false}
+{"request": "print the served models", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "scrap queued request 2c36", "command": "gozer cancel 2c36", "pred": "gozer queue 2c36", "exact": false, "canonical": false}
+{"request": "what is waiting for a lease", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "show me the wait queue", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "pause until f4ea gets chips", "command": "gozer wait f4ea", "pred": "gozer go.net f4ea", "exact": false, "canonical": false}
+{"request": "refresh lease 71f273, 90m expected", "command": "gozer renew 71f273 --expect 90m", "pred": "gozer renew 71f273 --expect 90m", "exact": true, "canonical": true}
+{"request": "snapshot all tt devices to stdout", "command": "tt-smi -s", "pred": "tt-smi -s", "exact": true, "canonical": true}
+{"request": "show the gozer history", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "list finished leases", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "pause until 2c36 gets chips", "command": "gozer wait 2c36", "pred": "gozer go", "exact": false, "canonical": false}
+{"request": "print board types and bus ids", "command": "tt-smi -ls", "pred": "gozer topology", "exact": false, "canonical": false}
+{"request": "print board types and bus ids", "command": "tt-smi -ls", "pred": "gozer topology", "exact": false, "canonical": false}
+{"request": "start tt-smi offline in compact mode", "command": "tt-smi -c --offline", "pred": "tt-smi -c --offline", "exact": true, "canonical": true}
+{"request": "describe the hardware layout", "command": "gozer topology", "pred": "tt-smi -ls", "exact": false, "canonical": false}
+{"request": "is anyone using the boards", "command": "gozer status", "pred": "gozer run", "exact": false, "canonical": false}
+{"request": "reset the boards for lease c13d2a without releasing", "command": "gozer reset c13d2a", "pred": "gozer reset c13d2a", "exact": true, "canonical": true}
+{"request": "reserve 4 chips under claude:tt-lang: reproduce the crash", "command": "gozer acquire --chips 4 --who claude:tt-lang --reason \"reproduce the crash\"", "pred": "gozer reserve --chips 4", "exact": false, "canonical": false}
+{"request": "get the current device snapshot", "command": "tt-smi -s", "pred": "gozer snapshot", "exact": false, "canonical": false}
+{"request": "print the served models", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "refresh lease 8980aa, 20m expected", "command": "gozer renew 8980aa --expect 20m", "pred": "gozer renew 8980a --expect 20m", "exact": false, "canonical": false}
+{"request": "show the gozer history", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "end lease c13d2a", "command": "gozer release c13d2a", "pred": "gozer renew c13d2a", "exact": false, "canonical": false}
+{"request": "restart the chips under lease 8980aa", "command": "gozer reset 8980aa", "pred": "gozer renew 8980a --expect 10", "exact": false, "canonical": false}
+{"request": "show me the wait queue", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "scrap queued request 300f", "command": "gozer cancel 300f", "pred": "gozer queue 300f", "exact": false, "canonical": false}
+{"request": "is anyone using the boards", "command": "gozer status", "pred": "gozer run", "exact": false, "canonical": false}
+{"request": "what boards does tt-smi see", "command": "tt-smi -ls", "pred": "tt-smi -ls", "exact": true, "canonical": true}
+{"request": "end lease 6f67ca", "command": "gozer release 6f67ca", "pred": "gozer release 6f67a", "exact": false, "canonical": false}
+{"request": "describe the hardware layout", "command": "gozer topology", "pred": "tt-smi -ls", "exact": false, "canonical": false}
+{"request": "get me 2 chips as claude:tt-lang, because I want to reproduce the crash", "command": "gozer acquire --chips 2 --who claude:tt-lang --reason \"reproduce the crash\"", "pred": "gozer get", "exact": false, "canonical": false}
+{"request": "pause until 6eb5 gets chips", "command": "gozer wait 6eb5", "pred": "gozer go", "exact": false, "canonical": false}
+{"request": "list finished leases", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "env for lease b6ae4b", "command": "gozer env b6ae4b", "pred": "gozer env b6ae4b", "exact": true, "canonical": true}
+{"request": "put the hardware snapshot in nightly.json", "command": "tt-smi -f nightly.json", "pred": "gozer snap --kets 53 --reason \"network her-coo with the robot\"", "exact": false, "canonical": false}
+{"request": "get me 2 chips as bob, because I want to reproduce the crash", "command": "gozer acquire --chips 2 --who bob --reason \"reproduce the crash\"", "pred": "gozer acquire --chips 2 --who cat --reason \"cpy the value of the last two days from the memory chip \"", "exact": false, "canonical": false}
+{"request": "what is waiting for a lease", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "restart the chips under lease 8980aa", "command": "gozer reset 8980aa", "pred": "gozer renew 8980a --expect 10", "exact": false, "canonical": false}
+{"request": "use 4 chips as ci-runner to run pytest tests/test_attention.py, to check the new firmware", "command": "gozer run --chips 4 --who ci-runner --reason \"check the new firmware\" -- pytest tests/test_attention.py", "pred": "gozer run --chips 4 --who ci-runner --reason \"check the new firmware\" -- pytest tests/test_attention.py", "exact": true, "canonical": true}
+{"request": "env for lease b6ae4b", "command": "gozer env b6ae4b", "pred": "gozer env b6ae4b", "exact": true, "canonical": true}
+{"request": "end lease c13d2a", "command": "gozer release c13d2a", "pred": "gozer renew c13d2a", "exact": false, "canonical": false}
+{"request": "list finished leases", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "show shell exports of lease c13d2a", "command": "gozer env c13d2a", "pred": "gozer env c13d2a", "exact": true, "canonical": true}
+{"request": "list finished leases", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "how are the chips laid out", "command": "gozer topology", "pred": "gozer fashion", "exact": false, "canonical": false}
+{"request": "show the gozer history", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "start tt-smi offline in compact mode", "command": "tt-smi -c --offline", "pred": "tt-smi -c --offline", "exact": true, "canonical": true}
+{"request": "get the current device snapshot", "command": "tt-smi -s", "pred": "gozer snapshot", "exact": false, "canonical": false}
+{"request": "what boards does tt-smi see", "command": "tt-smi -ls", "pred": "tt-smi -ls", "exact": true, "canonical": true}
+{"request": "snapshot the devices into board.json", "command": "tt-smi -f board.json", "pred": "tt-smi -f board.file", "exact": false, "canonical": false}
+{"request": "env for lease b6ae4b", "command": "gozer env b6ae4b", "pred": "gozer env b6ae4b", "exact": true, "canonical": true}
+{"request": "withdraw ticket 2c36", "command": "gozer cancel 2c36", "pred": "gozer withdraw 2c36", "exact": false, "canonical": false}
+{"request": "use 2 chips as bob to run python examples/resume_training.py, to measure decode speed", "command": "gozer run --chips 2 --who bob --reason \"measure decode speed\" -- python examples/resume_training.py", "pred": "gozer run --chips 2 --who bot --reason \"measure with the chip gun\" -- python examples/resume_training.py", "exact": false, "canonical": false}
+{"request": "refresh lease 8980aa, 1h expected", "command": "gozer renew 8980aa --expect 1h", "pred": "gozer renew 8980a --expect 1h", "exact": false, "canonical": false}
+{"request": "how are the chips laid out", "command": "gozer topology", "pred": "gozer fashion", "exact": false, "canonical": false}
+{"request": "show active services", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "what is waiting for a lease", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "scrap queued request 354d", "command": "gozer cancel 354d", "pred": "gozer queue 354d", "exact": false, "canonical": false}
+{"request": "start tt-smi offline in compact mode", "command": "tt-smi -c --offline", "pred": "tt-smi -c --offline", "exact": true, "canonical": true}
+{"request": "lease 71f273 needs 1h longer", "command": "gozer renew 71f273 --expect 1h", "pred": "gozer renew 71f273 --expect 1h", "exact": true, "canonical": true}
+{"request": "is anyone using the boards", "command": "gozer status", "pred": "gozer run", "exact": false, "canonical": false}
+{"request": "show me the wait queue", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "get me 1 chips as ci-runner, because I want to debug a hang", "command": "gozer acquire --chips 1 --who ci-runner --reason \"debug a hang\"", "pred": "gozer acquire --chips 1 --who ci-runner --reason \"hung\"", "exact": false, "canonical": false}
+{"request": "how are the chips laid out", "command": "gozer topology", "pred": "gozer fashion", "exact": false, "canonical": false}
+{"request": "show active services", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "reset the boards for lease b6ae4b without releasing", "command": "gozer reset b6ae4b", "pred": "gozer reset b6ae4b", "exact": true, "canonical": true}
+{"request": "return lease b6ae4b", "command": "gozer release b6ae4b", "pred": "gozer go", "exact": false, "canonical": false}
+{"request": "pause until f4ea gets chips", "command": "gozer wait f4ea", "pred": "gozer go.net f4ea", "exact": false, "canonical": false}
+{"request": "show active services", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "withdraw ticket 354d", "command": "gozer cancel 354d", "pred": "gozer withdraw 354d", "exact": false, "canonical": false}
+{"request": "snapshot the devices into nightly.json", "command": "tt-smi -f nightly.json", "pred": "tt-smi -f night-friebre.json", "exact": false, "canonical": false}
+{"request": "what boards does tt-smi see", "command": "tt-smi -ls", "pred": "tt-smi -ls", "exact": true, "canonical": true}
+{"request": "lease 1a0ce7 needs 20m longer", "command": "gozer renew 1a0ce7 --expect 20m", "pred": "gozer renew 1a0c7 --expect 20m", "exact": false, "canonical": false}
+{"request": "compact offline tt-smi please", "command": "tt-smi -c --offline", "pred": "tt-smi -s with the walk the the the the the the the the the the the the the the the the the the the the the the walk the the the the the the one that is in the file tt-smi to the one that is in the file tt", "exact": false, "canonical": false}
+{"request": "run python examples/resume_training.py on 4 chips for ci-runner: check the new firmware", "command": "gozer run --chips 4 --who ci-runner --reason \"check the new firmware\" -- python examples/resume_training.py", "pred": "gozer run --chips 4 --who ci-runner --reason \"check the new firmware\" -- python examples/resume_training.py", "exact": true, "canonical": true}
+{"request": "restart the chips under lease c13d2a", "command": "gozer reset c13d2a", "pred": "gozer renew c13d2a --expect 1", "exact": false, "canonical": false}
+{"request": "list finished leases", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "lease 1a0ce7 needs 90m longer", "command": "gozer renew 1a0ce7 --expect 90m", "pred": "gozer renew 1a0c7 --expect 90m", "exact": false, "canonical": false}
+{"request": "show me the wait queue", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "snapshot the devices into nightly.json", "command": "tt-smi -f nightly.json", "pred": "tt-smi -f night-friebre.json", "exact": false, "canonical": false}
+{"request": "return lease b6ae4b", "command": "gozer release b6ae4b", "pred": "gozer go", "exact": false, "canonical": false}
+{"request": "compact offline tt-smi please", "command": "tt-smi -c --offline", "pred": "tt-smi -s with the walk the the the the the the the the the the the the the the the the the the the the the the walk the the the the the the one that is in the file tt-smi to the one that is in the file tt", "exact": false, "canonical": false}
+{"request": "show active services", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "restart the chips under lease 8980aa", "command": "gozer reset 8980aa", "pred": "gozer renew 8980a --expect 10", "exact": false, "canonical": false}
+{"request": "put the hardware snapshot in board.json", "command": "tt-smi -f board.json", "pred": "gozer snap --kets 1034 F signature -- plea-tidal  lease1.ts for a.out", "exact": false, "canonical": false}
+{"request": "reset the boards for lease c13d2a without releasing", "command": "gozer reset c13d2a", "pred": "gozer reset c13d2a", "exact": true, "canonical": true}
+{"request": "print the served models", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "env for lease 71f273", "command": "gozer env 71f273", "pred": "gozer env 71f273", "exact": true, "canonical": true}
+{"request": "wait until my ticket c257 comes up", "command": "gozer wait c257", "pred": "gozer wait c257", "exact": true, "canonical": true}
+{"request": "what is waiting for a lease", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "lease 6f67ca needs 20m longer", "command": "gozer renew 6f67ca --expect 20m", "pred": "gozer renew 6f67a --expect 20m", "exact": false, "canonical": false}
+{"request": "is anyone using the boards", "command": "gozer status", "pred": "gozer run", "exact": false, "canonical": false}
+{"request": "how are the chips laid out", "command": "gozer topology", "pred": "gozer fashion", "exact": false, "canonical": false}
+{"request": "is anyone using the boards", "command": "gozer status", "pred": "gozer run", "exact": false, "canonical": false}
+{"request": "print board types and bus ids", "command": "tt-smi -ls", "pred": "gozer topology", "exact": false, "canonical": false}
+{"request": "give me the gozer status", "command": "gozer status", "pred": "gozer status", "exact": true, "canonical": true}
+{"request": "end lease 1a0ce7", "command": "gozer release 1a0ce7", "pred": "gozer until it is a home-ready chip", "exact": false, "canonical": false}
+{"request": "wait until my ticket 2c36 comes up", "command": "gozer wait 2c36", "pred": "gozer wait 2c36", "exact": true, "canonical": true}
+{"request": "compact offline tt-smi please", "command": "tt-smi -c --offline", "pred": "tt-smi -s with the walk the the the the the the the the the the the the the the the the the the the the the the walk the the the the the the one that is in the file tt-smi to the one that is in the file tt", "exact": false, "canonical": false}
+{"request": "compact offline tt-smi please", "command": "tt-smi -c --offline", "pred": "tt-smi -s with the walk the the the the the the the the the the the the the the the the the the the the the the walk the the the the the the one that is in the file tt-smi to the one that is in the file tt", "exact": false, "canonical": false}
+{"request": "show active services", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "return lease 8980aa", "command": "gozer release 8980aa", "pred": "gozer lease 8980a", "exact": false, "canonical": false}
+{"request": "show shell exports of lease c13d2a", "command": "gozer env c13d2a", "pred": "gozer env c13d2a", "exact": true, "canonical": true}
+{"request": "withdraw ticket c257", "command": "gozer cancel c257", "pred": "gozer withdraw c257", "exact": false, "canonical": false}
+{"request": "print the served models", "command": "gozer services", "pred": "gozer services", "exact": true, "canonical": true}
+{"request": "restart the chips under lease c13d2a", "command": "gozer reset c13d2a", "pred": "gozer renew c13d2a --expect 1", "exact": false, "canonical": false}
+{"request": "show me the wait queue", "command": "gozer queue", "pred": "gozer queue", "exact": true, "canonical": true}
+{"request": "snapshot the devices into after.json", "command": "tt-smi -f after.json", "pred": "tt-smi -f before.json", "exact": false, "canonical": false}
+{"request": "print board types and bus ids", "command": "tt-smi -ls", "pred": "gozer topology", "exact": false, "canonical": false}
+{"request": "use 4 chips as claude:orchard to run python examples/resume_training.py, to debug a hang", "command": "gozer run --chips 4 --who claude:orchard --reason \"debug a hang\" -- python examples/resume_training.py", "pred": "gozer run --chips 4 --who claude:orchard --reason \"hung out\" -- python example.py", "exact": false, "canonical": false}
+{"request": "give me the gozer status", "command": "gozer status", "pred": "gozer status", "exact": true, "canonical": true}
+{"request": "scrap queued request 354d", "command": "gozer cancel 354d", "pred": "gozer queue 354d", "exact": false, "canonical": false}
+{"request": "print board types and bus ids", "command": "tt-smi -ls", "pred": "gozer topology", "exact": false, "canonical": false}
+{"request": "wait until my ticket 2c36 comes up", "command": "gozer wait 2c36", "pred": "gozer wait 2c36", "exact": true, "canonical": true}
+{"request": "get the current device snapshot", "command": "tt-smi -s", "pred": "gozer snapshot", "exact": false, "canonical": false}
+{"request": "start tt-smi offline in compact mode", "command": "tt-smi -c --offline", "pred": "tt-smi -c --offline", "exact": true, "canonical": true}
+{"request": "reserve 1 chips under bob: measure decode speed", "command": "gozer acquire --chips 1 --who bob --reason \"measure decode speed\"", "pred": "gozer reserve --chips 1 --who bot --reason \"measure your test hardware\"", "exact": false, "canonical": false}
+{"request": "give me the gozer status", "command": "gozer status", "pred": "gozer status", "exact": true, "canonical": true}
+{"request": "refresh lease c13d2a, 1h expected", "command": "gozer renew c13d2a --expect 1h", "pred": "gozer renew c13d2a --expect 1h", "exact": true, "canonical": true}
+{"request": "use 4 chips as claude:tt-lang to run python serve.py, to measure decode speed", "command": "gozer run --chips 4 --who claude:tt-lang --reason \"measure decode speed\" -- python serve.py", "pred": "gozer run --chips 4 --who claude:tt-lang --reason \"measure with the tape\" -- python serve.py", "exact": false, "canonical": false}
+{"request": "put the hardware snapshot in board.json", "command": "tt-smi -f board.json", "pred": "gozer snap --kets 1034 F signature -- plea-tidal  lease1.ts for a.out", "exact": false, "canonical": false}
+{"request": "start tt-smi offline in compact mode", "command": "tt-smi -c --offline", "pred": "tt-smi -c --offline", "exact": true, "canonical": true}
+{"request": "get me 4 chips as bob, because I want to measure decode speed", "command": "gozer acquire --chips 4 --who bob --reason \"measure decode speed\"", "pred": "gozer acquire --chips 4 --who cat --reason \"measure measure 100 for learning\"", "exact": false, "canonical": false}
+{"request": "get the current device snapshot", "command": "tt-smi -s", "pred": "gozer snapshot", "exact": false, "canonical": false}
+{"request": "restart the chips under lease c13d2a", "command": "gozer reset c13d2a", "pred": "gozer renew c13d2a --expect 1", "exact": false, "canonical": false}
+{"request": "pause until 2c36 gets chips", "command": "gozer wait 2c36", "pred": "gozer go", "exact": false, "canonical": false}
+{"request": "describe the hardware layout", "command": "gozer topology", "pred": "tt-smi -ls", "exact": false, "canonical": false}
+{"request": "get me 4 chips as ci-runner, because I want to check the new firmware", "command": "gozer acquire --chips 4 --who ci-runner --reason \"check the new firmware\"", "pred": "gozer acquire --chips 4 --who ci-runner --reason \"check the new firmware\"", "exact": true, "canonical": true}
+{"request": "list finished leases", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "show shell exports of lease 71f273", "command": "gozer env 71f273", "pred": "gozer env 71f273", "exact": true, "canonical": true}
+{"request": "reset the boards for lease 8980aa without releasing", "command": "gozer reset 8980aa", "pred": "gozer reset 8980a", "exact": false, "canonical": false}
+{"request": "refresh lease c13d2a, 20m expected", "command": "gozer renew c13d2a --expect 20m", "pred": "gozer renew c13d2a --expect 20", "exact": false, "canonical": false}
+{"request": "snapshot all tt devices to stdout", "command": "tt-smi -s", "pred": "tt-smi -s", "exact": true, "canonical": true}
+{"request": "how are the chips laid out", "command": "gozer topology", "pred": "gozer fashion", "exact": false, "canonical": false}
+{"request": "put the hardware snapshot in board.json", "command": "tt-smi -f board.json", "pred": "gozer snap --kets 1034 F signature -- plea-tidal  lease1.ts for a.out", "exact": false, "canonical": false}
+{"request": "show the gozer history", "command": "gozer history", "pred": "gozer history", "exact": true, "canonical": true}
+{"request": "snapshot all tt devices to stdout", "command": "tt-smi -s", "pred": "tt-smi -s", "exact": true, "canonical": true}
+{"request": "snapshot the devices into board.json", "command": "tt-smi -f board.json", "pred": "tt-smi -f board.file", "exact": false, "canonical": false}
+{"request": "use 2 chips as claude:orchard to run python serve.py, to reproduce the crash", "command": "gozer run --chips 2 --who claude:orchard --reason \"reproduce the crash\" -- python serve.py", "pred": "gozer run --chips 2 --who claude:orchard --reason \"cute run the dance\" -- python serve.py", "exact": false, "canonical": false}
+{"request": "env for lease 1a0ce7", "command": "gozer env 1a0ce7", "pred": "gozer env 1a0c7", "exact": false, "canonical": false}
