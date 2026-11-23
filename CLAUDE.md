@@ -42,3 +42,9 @@ experiment (`docs/superpowers/specs/2026-11-23-ttlang-lora-proxy-design.md`, dra
 - Gozer note: SIGTERM to `gozer run` does not stop its children; kill the child PIDs, then `gozer reconcile`
   clears the stale lease. `TT_FT_VERBOSE=1` makes `train.py` pass `verbose=True` to show worker errors.
 - Findings page (private artifact): docs/tt-finetune-p300c.html in this repo.
+- 2026-11-23: model-size feasibility (`examples/memory_probe/`). Planner (`TTTrainer.supports`, seq 2048, rank 16):
+  1.5B BF16 fits (7.5 GiB), 7B fits mixed BF8/BF4 (28 GiB), 14B/32B/30B-A3B do not (49/104/92 GiB at BF4),
+  Qwen3-Coder-Next is not recognised (`qwen3_next`, linear attention). Real runs: 1.5B trains at seq 2048
+  (3.7 s/step, 551 tok/s) and 1024; 7B ran out of device memory in the first compiled step at seq 512 and 2048
+  (auto) and at 256/384/512 with `bf4_frozen`; only seq 128 ran (0.445 s/step). The planner's 28 GiB estimate for
+  7B is too low. Never `pgrep -f` a string that appears in your own command (it matches the shell).

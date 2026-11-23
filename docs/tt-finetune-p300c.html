@@ -132,6 +132,24 @@ a{color:var(--accent)}
   </section>
 
   <section>
+    <h2>How large a model fits on one chip</h2>
+    <p>The planner (<code>TTTrainer.supports</code>) predicts memory before training. I asked it about six coder models at sequence 2048, rank 16, batch 1, then ran the ones it admitted. The device holds about 34 GB across 8 banks.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Model</th><th>Planner says</th><th class="num">Planner estimate</th><th>Real run</th></tr></thead>
+      <tbody>
+        <tr><td>Qwen2.5-Coder 1.5B</td><td><span class="pill good">fits</span> BF16</td><td class="num">7.5 GiB</td><td><span class="pill good">ok</span> sequence 2048, 3.72 s/step, 551 tokens/s; sequence 1024, 2.24 s/step, 458 tokens/s</td></tr>
+        <tr><td>Qwen2.5-Coder 7B</td><td><span class="pill good">fits</span> mixed BF8/BF4</td><td class="num">28.0 GiB</td><td><span class="pill bad">out of memory</span> at sequences 512 and 2048</td></tr>
+        <tr><td>Qwen2.5-Coder 7B, all frozen weights BF4</td><td>not asked</td><td class="num">n/a</td><td><span class="pill good">ok</span> at 128, 0.445 s/step, 286 tokens/s; <span class="pill bad">out of memory</span> at 256, 384 and 512</td></tr>
+        <tr><td>Qwen2.5-Coder 14B</td><td><span class="pill bad">no</span> even at BF4</td><td class="num">49 GiB</td><td>not run</td></tr>
+        <tr><td>Qwen2.5-Coder 32B</td><td><span class="pill bad">no</span> even at BF4</td><td class="num">104 GiB</td><td>not run</td></tr>
+        <tr><td>Qwen3-Coder 30B-A3B (MoE)</td><td><span class="pill bad">no</span> even at BF4</td><td class="num">92 GiB</td><td>not run</td></tr>
+        <tr><td>Qwen3-Coder-Next (80B, linear attention)</td><td><span class="pill bad">not recognised</span></td><td class="num">n/a</td><td>not run. The planner stops at <code>layer model.layers.0 lacks recognizable attention or MLP/MoE</code>.</td></tr>
+      </tbody></table></div>
+    <p style="margin-top:12px">The long-sequence runs used 80 Python source files of 9 to 12 KB each, so every sequence is full length. Each ran 8 to 10 steps with the real compile. Loss values from these runs are not meaningful.</p>
+    <p>The planner admitted the 7B model but the device ran out of memory in the first compiled step, at every sequence length of 256 or more, even with all frozen weights at BF4. The planner's estimate leaves out some of the memory the run needs. The largest model I could train at a useful sequence length on one chip is the 1.5B one, at 2048 tokens.</p>
+  </section>
+
+  <section>
     <h2>How much depends on tt-xla</h2>
     <div class="grid">
       <div class="card"><div class="k">Python files</div><div class="v">195</div><p class="d">About 94,000 lines.</p></div>
@@ -148,6 +166,7 @@ a{color:var(--accent)}
       <li><strong>p300c.</strong> Is a two-chip board with one active training chip an intended setup? The device open logs <code>TT_FATAL ... connects to a remote mmio device</code> and carries on.</li>
       <li><strong>Multi-chip.</strong> What is the plan for using more than one chip in a job, and does it go through tt-xla or tt-metal directly?</li>
       <li><strong>Concurrent jobs.</strong> Would you take a change that puts the pipeline manifest and the system descriptor in a per-run directory? Today two jobs on one host collide on both.</li>
+      <li><strong>Memory planner.</strong> It admits Qwen2.5-Coder 7B at sequence 2048 (28 GiB), but the run runs out of device memory at 512, and at 256 with every frozen weight at BF4. Which memory does the estimate leave out, and is there a recommended way to reach longer sequences with a 7B model?</li>
       <li><strong>tt-xla.</strong> How much of the plan depends on it, and would a ttnn-only backend be accepted?</li>
     </ol>
   </section>
