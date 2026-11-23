@@ -1,0 +1,224 @@
+<title>tt-finetune on p300c</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one reading column, findings first, evidence below, questions for the author last.
+   Palette follows the Tenstorrent docs theme: dark forest teal, blue accent, pale teal grounds. */
+:root{
+  --bg:#F1F8F8; --surface:#FFFFFF; --surface-2:#DCF0EE; --line:#C7D9D8;
+  --ink:#092221; --ink-2:#3A5452; --muted:#5E7774;
+  --accent:#1B8EB1; --accent-soft:#74C5DF; --good:#2F7D6E; --warn:#B8830F; --bad:#C2432A;
+  --font-body:"Inter",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#071A19; --surface:#0C2827; --surface-2:#12403D; --line:#1F4A47;
+  --ink:#E6F3F2; --ink-2:#A9C6C3; --muted:#86A6A2;
+  --accent:#4FB6D6; --accent-soft:#74C5DF; --good:#6FABA0; --warn:#F6BC42; --bad:#FF9E8A; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#071A19; --surface:#0C2827; --surface-2:#12403D; --line:#1F4A47;
+  --ink:#E6F3F2; --ink-2:#A9C6C3; --muted:#86A6A2;
+  --accent:#4FB6D6; --accent-soft:#74C5DF; --good:#6FABA0; --warn:#F6BC42; --bad:#FF9E8A; color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:16px;line-height:1.55;
+  padding-inline:max(16px,env(safe-area-inset-left,0px)) max(16px,env(safe-area-inset-right,0px));padding-block:0}
+.wrap{max-width:880px;margin:0 auto;padding-block:40px 72px;display:flex;flex-direction:column;gap:44px}
+h1,h2,h3{font-weight:650;letter-spacing:-0.01em;text-wrap:balance;margin:0}
+h1{font-size:clamp(30px,5vw,44px);line-height:1.08}
+h2{font-size:22px;margin-bottom:14px}
+h3{font-size:15px;margin-bottom:6px}
+p{margin:0 0 12px;max-width:68ch}
+.lede{font-size:18px;color:var(--ink-2);max-width:62ch}
+.eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:12px}
+code,.mono{font-family:var(--font-mono);font-size:.9em}
+code{background:var(--surface-2);padding:1px 6px;border-radius:4px}
+section{min-width:0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 18px;min-width:0}
+.card .k{font-family:var(--font-mono);font-size:12px;color:var(--muted);letter-spacing:.04em;text-transform:uppercase}
+.card .v{font-size:30px;font-weight:650;line-height:1.15;margin:4px 0}
+.card .d{font-size:14px;color:var(--ink-2);margin:0}
+.pill{display:inline-block;font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em;padding:2px 9px;border-radius:99px;border:1px solid currentColor;vertical-align:middle}
+.pill.good{color:var(--good)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
+.chart{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px 14px 12px;position:relative}
+.chart h3{padding-inline:4px}
+.chart .sub{font-size:13.5px;color:var(--ink-2);padding-inline:4px;margin:0 0 8px}
+.chart svg{display:block;width:100%;height:auto}
+.chart text{font-family:var(--font-body);fill:var(--ink-2);font-size:12px}
+.chart .grid-line{stroke:var(--line);stroke-width:1}
+.chart .axis-line{stroke:var(--muted);stroke-width:1}
+.tip{position:absolute;pointer-events:none;background:var(--ink);color:var(--bg);font-size:12.5px;padding:5px 9px;border-radius:6px;white-space:nowrap;opacity:0;transition:opacity .1s;z-index:2}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14.5px;min-width:560px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;font-family:var(--font-mono);letter-spacing:.05em;text-transform:uppercase;color:var(--muted);font-weight:500}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+ol.q{margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:12px;max-width:68ch}
+ol.q li::marker{color:var(--accent);font-weight:650}
+a{color:var(--accent)}
+.note{font-size:14px;color:var(--muted)}
+@media (prefers-reduced-motion:reduce){.tip{transition:none}}
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Findings · 23 Nov 2026 · one Blackhole p300c board</div>
+    <h1>tt-finetune on p300c</h1>
+    <p class="lede">The v0.2.1 wheel trains a LoRA on this machine's p300c boards once four kernel headers are patched for the newer host compiler. A 135M model learned to turn English into <code>gozer</code> and <code>tt-smi</code> commands: 0 of 204 held-out requests before tuning, 85 of 204 after.</p>
+  </header>
+
+  <section>
+    <div class="grid">
+      <div class="card"><div class="k">Held-out exact match</div><div class="v">0 → 85 <span class="note" style="font-size:16px;font-weight:400">of 204</span></div><p class="d">Base SmolLM2-135M against the same model with a rank-16 LoRA. Unseen phrasings and slot values.</p></div>
+      <div class="card"><div class="k">Training speed</div><div class="v">0.55 s/step</div><p class="d">Median over 1,200 steps, about 225 tokens/s, batch 1, sequence 128, after compile.</p></div>
+      <div class="card"><div class="k">Blocker found</div><div class="v">Host SFPI 7.96</div><p class="d">The wheel's kernels were built for SFPI 7.67. A four-edit header patch removes the failure.</p></div>
+      <div class="card"><div class="k">Chips per job</div><div class="v">2 (one board)</div><p class="d">One job per board, so four chips run two jobs. A job pinned to one chip of a board fails in tt-metal.</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The result</h2>
+    <p>The task has 17 commands, each with six English phrasings. Four phrasings per command are in training. The other two, and different lease IDs, ticket IDs and reasons, appear only in the 204-request test set. No test request appears verbatim in the training data.</p>
+    <div class="chart" id="c-ba">
+      <h3>Exact-match answers on the held-out set</h3>
+      <p class="sub">Out of 204 requests. The base model repeats the request back, so its zero is a real zero.</p>
+      <svg id="svg-ba" viewBox="0 0 800 130" role="img" aria-label="Base model 0 of 204, tuned model 85 of 204"></svg>
+    </div>
+    <div style="height:14px"></div>
+    <div class="chart" id="c-loss">
+      <h3>Training loss</h3>
+      <p class="sub">Logged every 25 steps over one 1,200-step run. Loss covers the whole text, including the request, which the model cannot predict, so it does not fall to zero.</p>
+      <svg id="svg-loss" viewBox="0 0 800 290" role="img" aria-label="Loss falls from 4.0 at step 2 to about 0.6 at step 1200"></svg>
+      <div class="tip" id="tip-loss"></div>
+    </div>
+    <div style="height:14px"></div>
+    <div class="chart" id="c-int">
+      <h3>Score by command</h3>
+      <p class="sub">Correct out of 12 held-out requests per command. Commands with one fixed form score highest. Commands that need slots such as a lease ID or a reason score lowest.</p>
+      <svg id="svg-int" viewBox="0 0 800 440" role="img" aria-label="Held-out score per command"></svg>
+      <div class="tip" id="tip-int"></div>
+    </div>
+    <p style="margin-top:12px">A longer run did not help. At 2,000 steps the same rank-16 setup also scores 85 of 204. 102 of the 204 answers differ from the 1,200-step run, with 18 gained and 18 lost, so the score has levelled off near 42% for this data and rank.</p>
+    <p class="note">Typical misses: the model invents a subcommand (<code>gozer withdraw</code>, <code>gozer reserve</code>), writes <code>gozer</code> where <code>tt-smi</code> was meant, or truncates a lease ID. The run was 1,200 steps, about 1.6 passes over the data. More epochs, a larger rank and loss on the command alone are untried.</p>
+  </section>
+
+  <section>
+    <h2>Why it failed first, and the patch</h2>
+    <p>The smoke test printed only <code>*** End of error message ***</code>. Running the same probe directly showed the cause. The wheel bundles tt-metal built for SFPI 7.67.0, but tt-metal compiles device kernels with the host compiler in <code>/opt/tenstorrent/sfpi</code>, which is 7.96.0 after this morning's reboot to tt-kmd 2.12.0. That compiler treats warnings as errors and rejects four idioms in the older headers.</p>
+    <div class="scroll"><table>
+      <thead><tr><th>Header (blackhole)</th><th>Old idiom</th><th>Host compiler says</th></tr></thead>
+      <tbody>
+        <tr><td><code>ckernel_sfpu_exp.h</code>, <code>ckernel_sfpu_exp2.h</code></td><td><code>__builtin_rvtt_sfpiadd_i(src, imm, mod)</code></td><td>macro is deprecated, provide iptr operands explicitly</td></tr>
+        <tr><td><code>ckernel_sfpu_sigmoid_appx.h</code>, <code>ckernel_sfpu_tanh.h</code></td><td><code>sfpi::lut(vFloat, vUInt, vUInt, vUInt)</code></td><td>use of deleted function; pass <code>vLut8si</code> coefficients</td></tr>
+      </tbody></table></div>
+    <p style="margin-top:12px">The patch (<code>tools/patch_wheel_for_host_sfpi.py</code>) calls the builtin with its explicit operands and loads the coefficients as <code>vLut8si</code> from the same registers, so the generated instructions stay the same. After it, a tiny device add is exact in 5.5 s and <code>tt-finetune doctor --smoke</code> passes. Real training compiled and ran with no further header errors.</p>
+    <p class="note">Pointing the runtime at an older SFPI through an overlay root has no effect, because tt-metal checks <code>/opt/tenstorrent/sfpi</code> first.</p>
+  </section>
+
+  <section>
+    <h2>Using more than one chip</h2>
+    <div class="grid">
+      <div class="card"><div class="k">One job, many chips</div><div class="v">Not supported</div><p class="d">The project documents a single P150a and no multi-device training. The job ran on <code>xla:0</code>.</p></div>
+      <div class="card"><div class="k">One job per chip</div><div class="v"><span class="pill bad">fails</span></div><p class="d">With <code>TT_VISIBLE_DEVICES</code> set to one chip of a p300c pair, tt-metal reports a CUSTOM cluster and asks for a fabric mesh graph descriptor.</p></div>
+      <div class="card"><div class="k">Two jobs, one per board</div><div class="v"><span class="pill good">works</span> 0.58 s/step</div><p class="d">Each job runs about 6 to 8% slower than the 0.55 s/step solo run, so two boards give about 1.85 times the work. It needs a private temp directory per job (below).</p></div>
+    </div>
+    <h3 style="margin-top:20px">Two shared paths break concurrent jobs</h3>
+    <div class="scroll"><table>
+      <thead><tr><th>Shared path</th><th>What happens</th><th>Fix</th></tr></thead>
+      <tbody>
+        <tr><td><code>~/.cache/tt-finetune/workspace</code> (pipeline manifest)</td><td>One job reads the manifest while another is writing it, gets an empty file, and stops with <code>TypeError: 'NoneType' object is not subscriptable</code>.</td><td>A <code>workspace=</code> per job.</td></tr>
+        <tr><td><code>/tmp/tt_pjrt_system_descriptor</code></td><td>The second job trains all its steps, then fails at checkpoint export with <code>system desc does not exist</code> and <code>Error code: 13</code>. The path comes from <code>tempfile.gettempdir()</code> in <code>ttxla_tools/serialization.py</code>.</td><td>A private <code>TMPDIR</code> per job. Keep it short, because a long path fails with <code>AF_UNIX path too long</code>.</td></tr>
+      </tbody></table></div>
+    <p class="note" style="margin-top:12px">Evidence for the second row: the shared-<code>/tmp</code> pair failed three times out of three, in the second job each time. With a private <code>TMPDIR</code> for each job, both jobs finished 100 steps and saved adapters. That is one passing pair run, so treat it as likely and not settled. The script is <code>examples/translator/run_two_boards.sh</code>.</p>
+  </section>
+
+  <section>
+    <h2>How much depends on tt-xla</h2>
+    <div class="grid">
+      <div class="card"><div class="k">Python files</div><div class="v">195</div><p class="d">About 94,000 lines.</p></div>
+      <div class="card"><div class="k">Import torch_xla</div><div class="v">12</div><p class="d">Plus 5 that mention PJRT and 1 that loads <code>torch_plugin_tt</code>.</p></div>
+      <div class="card"><div class="k">Import ttnn</div><div class="v">26</div><p class="d">132 files reference <code>tt_lang</code>. Most of the code already targets tt-metal and TT-Lang directly.</p></div>
+    </div>
+    <p style="margin-top:14px">The wheel itself is a frozen bundle: the PJRT plugin 1.4.0.dev20260723 (TT-MLIR plus its own tt-metal), a custom torch-xla 2.9.0, and tt-lang 1.1.5. Orchard's pinned pair is tt-lang 1.1.10 with tt-metal 0.80. I could not check how actively tt-xla is maintained, because the GitHub token for the Tenstorrent organization is blocked by SSO.</p>
+  </section>
+
+  <section>
+    <h2>Questions for the author</h2>
+    <ol class="q">
+      <li><strong>Host compiler.</strong> Can the wheel bundle its own SFPI, or update the four headers, so it builds on current hosts without a patch?</li>
+      <li><strong>p300c.</strong> Is a two-chip board with one active training chip an intended setup? The device open logs <code>TT_FATAL ... connects to a remote mmio device</code> and carries on.</li>
+      <li><strong>Multi-chip.</strong> What is the plan for using more than one chip in a job, and does it go through tt-xla or tt-metal directly?</li>
+      <li><strong>Concurrent jobs.</strong> Would you take a change that puts the pipeline manifest and the system descriptor in a per-run directory? Today two jobs on one host collide on both.</li>
+      <li><strong>tt-xla.</strong> How much of the plan depends on it, and would a ttnn-only backend be accepted?</li>
+      <li><strong>Next target.</strong> We want to LoRA-tune a coder model on TT-Lang kernels. Which model sizes and which architectures are qualified for training today?</li>
+    </ol>
+  </section>
+
+  <footer class="note">
+    Fork: <a href="https://github.com/tsingletaryTT/tt-finetune" target="_blank" rel="noopener">github.com/tsingletaryTT/tt-finetune</a>, branch <code>host-sfpi-compat</code>.
+    Data generator, training and scoring scripts, per-example results and the adapter are under <code>examples/translator/</code>.
+    Upstream: danielisraeli2409-jpg/tt-finetune, release v0.2.1.
+  </footer>
+</div>
+
+<script>
+/* All numbers below come from examples/translator/results/ in the fork: train_steps.log and tuned_results.jsonl. */
+const LOSS=[[2,4.0312],[25,3.7812],[50,3.3594],[75,3.0938],[100,2.4688],[125,1.9766],[150,2.2344],[175,1.9609],[200,1.7109],[225,1.6562],[250,1.8984],[275,1.5703],[300,1.3281],[325,1.6172],[350,1.25],[375,1.3281],[400,1.2109],[425,1.2109],[450,1.3828],[475,1.2188],[500,1.3984],[525,1.1562],[550,1.2266],[575,1.0234],[600,0.918],[625,1.1641],[650,1.0625],[675,0.9883],[700,0.8984],[725,0.9883],[750,0.793],[775,0.8867],[800,0.9141],[825,0.7891],[850,0.8633],[875,0.8281],[900,0.8281],[925,0.7031],[950,0.8711],[975,0.6172],[1000,0.7305],[1025,0.7383],[1050,0.707],[1075,0.5703],[1100,0.6367],[1125,0.7656],[1150,0.5977],[1175,0.5625],[1200,0.6992]];
+const INTENT={"gozer services":12,"gozer history":12,"gozer queue":12,"gozer env":9,"gozer status":6,"gozer wait":6,"tt-smi -s":6,"tt-smi -ls":6,"tt-smi -c --offline":6,"gozer reset":4,"gozer renew":3,"gozer run":2,"gozer acquire":1,"gozer topology":0,"gozer cancel":0,"gozer release":0,"tt-smi -f":0};
+const NS="http://www.w3.org/2000/svg";
+const css=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function el(tag,attrs,parent,text){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(text!==undefined)e.textContent=text;if(parent)parent.appendChild(e);return e}
+function showTip(tip,box,html,x,y){tip.innerHTML=html;tip.style.opacity=1;const b=box.getBoundingClientRect();
+  tip.style.left=Math.max(4,Math.min(x-b.left+12,b.width-tip.offsetWidth-4))+"px";tip.style.top=(y-b.top-34)+"px"}
+
+function drawBA(){
+  const s=document.getElementById("svg-ba");s.innerHTML="";
+  const x0=110,x1=760,sc=v=>x0+(x1-x0)*v/204;
+  [[0,"Base model",0,"--muted"],[1,"With LoRA",85,"--accent"]].forEach(([i,lab,v,c])=>{
+    const y=18+i*52;
+    el("text",{x:0,y:y+22,"font-size":14,style:"font-size:14px;fill:var(--ink)"},s,lab);
+    el("rect",{x:x0,y:y,width:x1-x0,height:30,rx:4,fill:css("--surface-2")},s);
+    if(v>0)el("rect",{x:x0,y:y,width:sc(v)-x0,height:30,rx:4,fill:css(c)},s);
+    el("text",{x:(v>0?sc(v)+8:x0+8),y:y+21,style:"font-size:14px;font-weight:600;fill:var(--ink)"},s,v+" of 204"+(v>0?"  ("+(100*v/204).toFixed(1)+"%)":""));
+  });
+}
+function drawLoss(){
+  const s=document.getElementById("svg-loss");s.innerHTML="";
+  const L=46,R=782,T=14,B=250,xs=v=>L+(R-L)*v/1200,ys=v=>B-(B-T)*v/4.5;
+  for(let v=0;v<=4;v++){el("line",{x1:L,x2:R,y1:ys(v),y2:ys(v),class:v?"grid-line":"axis-line"},s);el("text",{x:L-8,y:ys(v)+4,"text-anchor":"end"},s,v)}
+  for(let v=0;v<=1200;v+=300)el("text",{x:xs(v),y:B+20,"text-anchor":"middle"},s,v);
+  el("text",{x:(L+R)/2,y:B+38,"text-anchor":"middle"},s,"training step");
+  el("text",{x:12,y:T+4,"text-anchor":"start"},s,"loss");
+  const d=LOSS.map((p,i)=>(i?"L":"M")+xs(p[0]).toFixed(1)+" "+ys(p[1]).toFixed(1)).join(" ");
+  el("path",{d,fill:"none",stroke:css("--accent"),"stroke-width":2,"stroke-linejoin":"round"},s);
+  const last=LOSS[LOSS.length-1];
+  el("circle",{cx:xs(last[0]),cy:ys(last[1]),r:5,fill:css("--accent"),stroke:css("--surface"),"stroke-width":2},s);
+  el("text",{x:xs(last[0])-8,y:ys(last[1])-12,"text-anchor":"end",style:"fill:var(--ink);font-weight:600"},s,"0.70");
+  const first=LOSS[1];el("text",{x:xs(first[0])+10,y:ys(first[1])-8,style:"fill:var(--ink);font-weight:600"},s,"3.78 at step 25");
+  const cross=el("line",{y1:T,y2:B,stroke:css("--muted"),"stroke-width":1,opacity:0},s),dot=el("circle",{r:5,fill:css("--accent"),stroke:css("--surface"),"stroke-width":2,opacity:0},s);
+  const tip=document.getElementById("tip-loss"),box=document.getElementById("c-loss");
+  const hit=el("rect",{x:L,y:T,width:R-L,height:B-T,fill:"transparent"},s);
+  hit.addEventListener("mousemove",e=>{const r=s.getBoundingClientRect(),vx=(e.clientX-r.left)*800/r.width,step=1200*(vx-L)/(R-L);
+    let best=LOSS[0];for(const p of LOSS)if(Math.abs(p[0]-step)<Math.abs(best[0]-step))best=p;
+    cross.setAttribute("x1",xs(best[0]));cross.setAttribute("x2",xs(best[0]));cross.setAttribute("opacity",1);
+    dot.setAttribute("cx",xs(best[0]));dot.setAttribute("cy",ys(best[1]));dot.setAttribute("opacity",1);
+    showTip(tip,box,"step "+best[0]+" · loss "+best[1].toFixed(2),e.clientX,e.clientY)});
+  hit.addEventListener("mouseleave",()=>{cross.setAttribute("opacity",0);dot.setAttribute("opacity",0);tip.style.opacity=0});
+}
+function drawInt(){
+  const s=document.getElementById("svg-int");s.innerHTML="";
+  const rows=Object.entries(INTENT),x0=170,x1=720,sc=v=>x0+(x1-x0)*v/12,rh=24,T=6;
+  const tip=document.getElementById("tip-int"),box=document.getElementById("c-int");
+  for(let v=0;v<=12;v+=3){el("line",{x1:sc(v),x2:sc(v),y1:T,y2:T+rows.length*rh,class:v?"grid-line":"axis-line"},s);el("text",{x:sc(v),y:T+rows.length*rh+18,"text-anchor":"middle"},s,v)}
+  rows.forEach(([k,v],i)=>{const y=T+i*rh;
+    el("text",{x:x0-10,y:y+16,"text-anchor":"end",style:"font-family:var(--font-mono);font-size:12px;fill:var(--ink)"},s,k);
+    if(v>0)el("rect",{x:x0,y:y+4,width:sc(v)-x0,height:16,rx:3,fill:css("--accent")},s);
+    el("text",{x:(v>0?sc(v)+8:x0+8),y:y+16,style:"font-weight:600;fill:var(--ink)"},s,v+"/12");
+    const hit=el("rect",{x:0,y:y,width:800,height:rh,fill:"transparent"},s);
+    hit.addEventListener("mousemove",e=>showTip(tip,box,k+" · "+v+" of 12 correct",e.clientX,e.clientY));
+    hit.addEventListener("mouseleave",()=>tip.style.opacity=0)});
+}
+function draw(){drawBA();drawLoss();drawInt()}
+draw();
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change",draw);
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:["data-theme"]});
+</script>

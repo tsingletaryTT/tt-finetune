@@ -29,3 +29,16 @@ experiment (`docs/superpowers/specs/2026-11-23-ttlang-lora-proxy-design.md`, dra
   Strong on intents with one fixed command (`gozer queue/history/services` 12/12), weak where the model invents
   subcommands (`gozer withdraw`) or mixes gozer with tt-smi. Training took about 14 min; scoring runs on CPU.
   Results in `examples/translator/results/`. Not tried: more epochs, rank, completion-only loss.
+- 2026-11-23: using more chips. One job cannot span chips (single-device). One job per CHIP fails (pinning one chip
+  of a p300c pair gives a CUSTOM cluster and a fabric mesh descriptor error), so the unit is one job per BOARD:
+  4 chips run 2 jobs. Two concurrent jobs break on two shared paths: the pipeline manifest in
+  `~/.cache/tt-finetune/workspace` (fix: `workspace=` per job) and `/tmp/tt_pjrt_system_descriptor` (from
+  `tempfile.gettempdir()`; second job fails at checkpoint export with "Error code: 13"; fix: short private
+  `TMPDIR` per job; a long path gives "AF_UNIX path too long"). With both fixes the pair ran 100 steps and saved
+  adapters (one pair run). Step time: solo 0.546 s, pair 0.575 to 0.592 s (about 6 to 8% slower, ~1.85x throughput).
+  `examples/translator/run_two_boards.sh` does it. A rank-32 job alone on board 2 (chips 2,3) also works.
+- 2026-11-23: rank 16 at 2000 steps scores 85/204, the same count as 1200 steps (102 answers differ, +18/-18):
+  the score has levelled off near 42% for this data. Hex IDs get mangled (`1a0c7` for `1a0ce7`).
+- Gozer note: SIGTERM to `gozer run` does not stop its children; kill the child PIDs, then `gozer reconcile`
+  clears the stale lease. `TT_FT_VERBOSE=1` makes `train.py` pass `verbose=True` to show worker errors.
+- Findings page (private artifact): docs/tt-finetune-p300c.html in this repo.
